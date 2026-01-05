@@ -171,7 +171,7 @@ with st.sidebar:
                         ris_df["Shipping State Corrected"].str.upper().str.strip() == 
                         ris_df["FC State"].str.upper().str.strip(),
                         "RIS",
-                        "Low RIS"
+                        "Non RIS"
                     )
                     
                     # Convert all object columns to string to avoid PyArrow serialization errors
@@ -193,19 +193,19 @@ with st.sidebar:
                     # Ensure columns exist
                     if "RIS" not in brand_wise.columns:
                         brand_wise["RIS"] = 0
-                    if "Low RIS" not in brand_wise.columns:
-                        brand_wise["Low RIS"] = 0
-                    brand_wise["Grand Total"] = brand_wise["RIS"] + brand_wise["Low RIS"]
+                    if "Non RIS" not in brand_wise.columns:
+                        brand_wise["Non RIS"] = 0
+                    brand_wise["Grand Total"] = brand_wise["RIS"] + brand_wise["Non RIS"]
                     brand_wise["RIS %"] = ((brand_wise["RIS"] / brand_wise["Grand Total"]) * 100).round(2)
-                    brand_wise["Low RIS %"] = ((brand_wise["Low RIS"] / brand_wise["Grand Total"]) * 100).round(2)
+                    brand_wise["Non RIS %"] = ((brand_wise["Non RIS"] / brand_wise["Grand Total"]) * 100).round(2)
                     # Add Grand Total row
                     grand_total_row = pd.DataFrame({
                         "Brand": ["Grand Total"],
                         "RIS": [brand_wise["RIS"].sum()],
-                        "Low RIS": [brand_wise["Low RIS"].sum()],
+                        "Non RIS": [brand_wise["Non RIS"].sum()],
                         "Grand Total": [brand_wise["Grand Total"].sum()],
                         "RIS %": [round((brand_wise["RIS"].sum() / brand_wise["Grand Total"].sum()) * 100, 2)],
-                        "Low RIS %": [round((brand_wise["Low RIS"].sum() / brand_wise["Grand Total"].sum()) * 100, 2)]
+                        "Non RIS %": [round((brand_wise["Non RIS"].sum() / brand_wise["Grand Total"].sum()) * 100, 2)]
                     })
                     brand_wise = pd.concat([brand_wise, grand_total_row], ignore_index=True)
                     results['brand_wise'] = brand_wise
@@ -217,20 +217,20 @@ with st.sidebar:
                     ).reset_index()
                     if "RIS" not in asin_wise.columns:
                         asin_wise["RIS"] = 0
-                    if "Low RIS" not in asin_wise.columns:
-                        asin_wise["Low RIS"] = 0
-                    asin_wise["Grand Total"] = asin_wise["RIS"] + asin_wise["Low RIS"]
+                    if "Non RIS" not in asin_wise.columns:
+                        asin_wise["Non RIS"] = 0
+                    asin_wise["Grand Total"] = asin_wise["RIS"] + asin_wise["Non RIS"]
                     asin_wise["RIS %"] = ((asin_wise["RIS"] / asin_wise["Grand Total"]) * 100).round(2)
-                    asin_wise["Low RIS %"] = ((asin_wise["Low RIS"] / asin_wise["Grand Total"]) * 100).round(2)
+                    asin_wise["Non RIS %"] = ((asin_wise["Non RIS"] / asin_wise["Grand Total"]) * 100).round(2)
                     # Add Grand Total row
                     grand_total_row = pd.DataFrame({
                         "ASIN": ["Grand Total"],
                         "Brand": [""],
                         "RIS": [asin_wise["RIS"].sum()],
-                        "Low RIS": [asin_wise["Low RIS"].sum()],
+                        "Non RIS": [asin_wise["Non RIS"].sum()],
                         "Grand Total": [asin_wise["Grand Total"].sum()],
                         "RIS %": [round((asin_wise["RIS"].sum() / asin_wise["Grand Total"].sum()) * 100, 2)],
-                        "Low RIS %": [round((asin_wise["Low RIS"].sum() / asin_wise["Grand Total"].sum()) * 100, 2)]
+                        "Non RIS %": [round((asin_wise["Non RIS"].sum() / asin_wise["Grand Total"].sum()) * 100, 2)]
                     })
                     asin_wise = pd.concat([asin_wise, grand_total_row], ignore_index=True)
                     results['asin_wise'] = asin_wise
@@ -242,19 +242,19 @@ with st.sidebar:
                     ).reset_index()
                     if "RIS" not in cluster_wise.columns:
                         cluster_wise["RIS"] = 0
-                    if "Low RIS" not in cluster_wise.columns:
-                        cluster_wise["Low RIS"] = 0
-                    cluster_wise["Grand Total"] = cluster_wise["RIS"] + cluster_wise["Low RIS"]
+                    if "Non RIS" not in cluster_wise.columns:
+                        cluster_wise["Non RIS"] = 0
+                    cluster_wise["Grand Total"] = cluster_wise["RIS"] + cluster_wise["Non RIS"]
                     cluster_wise["RIS %"] = ((cluster_wise["RIS"] / cluster_wise["Grand Total"]) * 100).round(2)
-                    cluster_wise["Low RIS %"] = ((cluster_wise["Low RIS"] / cluster_wise["Grand Total"]) * 100).round(2)
+                    cluster_wise["Non RIS %"] = ((cluster_wise["Non RIS"] / cluster_wise["Grand Total"]) * 100).round(2)
                     # Add Grand Total row
                     grand_total_row = pd.DataFrame({
                         "FC Cluster": ["Grand Total"],
                         "RIS": [cluster_wise["RIS"].sum()],
-                        "Low RIS": [cluster_wise["Low RIS"].sum()],
+                        "Non RIS": [cluster_wise["Non RIS"].sum()],
                         "Grand Total": [cluster_wise["Grand Total"].sum()],
                         "RIS %": [round((cluster_wise["RIS"].sum() / cluster_wise["Grand Total"].sum()) * 100, 2)],
-                        "Low RIS %": [round((cluster_wise["Low RIS"].sum() / cluster_wise["Grand Total"].sum()) * 100, 2)]
+                        "Non RIS %": [round((cluster_wise["Non RIS"].sum() / cluster_wise["Grand Total"].sum()) * 100, 2)]
                     })
                     cluster_wise = pd.concat([cluster_wise, grand_total_row], ignore_index=True)
                     results['cluster_wise'] = cluster_wise
@@ -266,18 +266,18 @@ with st.sidebar:
                     ).reset_index()
                     if "RIS" not in cluster_brand.columns:
                         cluster_brand["RIS"] = 0
-                    if "Low RIS" not in cluster_brand.columns:
-                        cluster_brand["Low RIS"] = 0
+                    if "Non RIS" not in cluster_brand.columns:
+                        cluster_brand["Non RIS"] = 0
                     # Ensure numeric types
                     cluster_brand["RIS"] = pd.to_numeric(cluster_brand["RIS"], errors='coerce').fillna(0)
-                    cluster_brand["Low RIS"] = pd.to_numeric(cluster_brand["Low RIS"], errors='coerce').fillna(0)
-                    cluster_brand["Grand Total"] = cluster_brand["RIS"] + cluster_brand["Low RIS"]
+                    cluster_brand["Non RIS"] = pd.to_numeric(cluster_brand["Non RIS"], errors='coerce').fillna(0)
+                    cluster_brand["Grand Total"] = cluster_brand["RIS"] + cluster_brand["Non RIS"]
                     cluster_brand["RIS %"] = ((cluster_brand["RIS"] / cluster_brand["Grand Total"]) * 100).round(2).fillna(0)
-                    cluster_brand["Low RIS %"] = ((cluster_brand["Low RIS"] / cluster_brand["Grand Total"]) * 100).round(2).fillna(0)
+                    cluster_brand["Non RIS %"] = ((cluster_brand["Non RIS"] / cluster_brand["Grand Total"]) * 100).round(2).fillna(0)
                     
                     # Calculate Grand Total from original data
                     total_ris = float(cluster_brand["RIS"].sum())
-                    total_non_ris = float(cluster_brand["Low RIS"].sum())
+                    total_non_ris = float(cluster_brand["Non RIS"].sum())
                     total_grand = total_ris + total_non_ris
                     
                     # Add Grand Total row
@@ -285,10 +285,10 @@ with st.sidebar:
                         "FC Cluster": ["Grand Total"],
                         "Brand": [""],
                         "RIS": [total_ris],
-                        "Low RIS": [total_non_ris],
+                        "Non RIS": [total_non_ris],
                         "Grand Total": [total_grand],
                         "RIS %": [round((total_ris / total_grand) * 100, 2) if total_grand > 0 else 0],
-                        "Low RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
+                        "Non RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
                     })
                     cluster_brand = pd.concat([cluster_brand, grand_total_row], ignore_index=True)
                     results['cluster_brand'] = cluster_brand
@@ -300,19 +300,19 @@ with st.sidebar:
                     ).reset_index()
                     if "RIS" not in state_cluster.columns:
                         state_cluster["RIS"] = 0
-                    if "Low RIS" not in state_cluster.columns:
-                        state_cluster["Low RIS"] = 0
-                    state_cluster["Grand Total"] = state_cluster["RIS"] + state_cluster["Low RIS"]
+                    if "Non RIS" not in state_cluster.columns:
+                        state_cluster["Non RIS"] = 0
+                    state_cluster["Grand Total"] = state_cluster["RIS"] + state_cluster["Non RIS"]
                     state_cluster["RIS %"] = ((state_cluster["RIS"] / state_cluster["Grand Total"]) * 100).round(2)
-                    state_cluster["Low RIS %"] = ((state_cluster["Low RIS"] / state_cluster["Grand Total"]) * 100).round(2)
+                    state_cluster["Non RIS %"] = ((state_cluster["Non RIS"] / state_cluster["Grand Total"]) * 100).round(2)
                     # Add Grand Total row
                     grand_total_row = pd.DataFrame({
                         "FC State Cluster": ["Grand Total"],
                         "RIS": [state_cluster["RIS"].sum()],
-                        "Low RIS": [state_cluster["Low RIS"].sum()],
+                        "Non RIS": [state_cluster["Non RIS"].sum()],
                         "Grand Total": [state_cluster["Grand Total"].sum()],
                         "RIS %": [round((state_cluster["RIS"].sum() / state_cluster["Grand Total"].sum()) * 100, 2)],
-                        "Low RIS %": [round((state_cluster["Low RIS"].sum() / state_cluster["Grand Total"].sum()) * 100, 2)]
+                        "Non RIS %": [round((state_cluster["Non RIS"].sum() / state_cluster["Grand Total"].sum()) * 100, 2)]
                     })
                     state_cluster = pd.concat([state_cluster, grand_total_row], ignore_index=True)
                     results['state_cluster'] = state_cluster
@@ -324,18 +324,18 @@ with st.sidebar:
                     ).reset_index()
                     if "RIS" not in state_fc.columns:
                         state_fc["RIS"] = 0
-                    if "Low RIS" not in state_fc.columns:
-                        state_fc["Low RIS"] = 0
+                    if "Non RIS" not in state_fc.columns:
+                        state_fc["Non RIS"] = 0
                     # Ensure numeric types
                     state_fc["RIS"] = pd.to_numeric(state_fc["RIS"], errors='coerce').fillna(0)
-                    state_fc["Low RIS"] = pd.to_numeric(state_fc["Low RIS"], errors='coerce').fillna(0)
-                    state_fc["Grand Total"] = state_fc["RIS"] + state_fc["Low RIS"]
+                    state_fc["Non RIS"] = pd.to_numeric(state_fc["Non RIS"], errors='coerce').fillna(0)
+                    state_fc["Grand Total"] = state_fc["RIS"] + state_fc["Non RIS"]
                     state_fc["RIS %"] = ((state_fc["RIS"] / state_fc["Grand Total"]) * 100).round(2).fillna(0)
-                    state_fc["Low RIS %"] = ((state_fc["Low RIS"] / state_fc["Grand Total"]) * 100).round(2).fillna(0)
+                    state_fc["Non RIS %"] = ((state_fc["Non RIS"] / state_fc["Grand Total"]) * 100).round(2).fillna(0)
                     
                     # Calculate Grand Total from original data
                     total_ris = float(state_fc["RIS"].sum())
-                    total_non_ris = float(state_fc["Low RIS"].sum())
+                    total_non_ris = float(state_fc["Non RIS"].sum())
                     total_grand = total_ris + total_non_ris
                     
                     # Add Grand Total row
@@ -343,10 +343,10 @@ with st.sidebar:
                         "FC State Cluster": ["Grand Total"],
                         "FC Cluster": [""],
                         "RIS": [total_ris],
-                        "Low RIS": [total_non_ris],
+                        "Non RIS": [total_non_ris],
                         "Grand Total": [total_grand],
                         "RIS %": [round((total_ris / total_grand) * 100, 2) if total_grand > 0 else 0],
-                        "Low RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
+                        "Non RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
                     })
                     state_fc = pd.concat([state_fc, grand_total_row], ignore_index=True)
                     results['state_fc'] = state_fc
@@ -383,7 +383,7 @@ if st.session_state.processed_data is not None:
             ris_count = len(df[df["RIS Status"] == "RIS"])
             st.metric("RIS Orders", f"{ris_count:,}")
         with col3:
-            non_ris_count = len(df[df["RIS Status"] == "Low RIS"])
+            non_ris_count = len(df[df["RIS Status"] == "Non RIS"])
             st.metric("Non-RIS Orders", f"{non_ris_count:,}")
         with col4:
             ris_percent = (ris_count / len(df) * 100) if len(df) > 0 else 0
@@ -521,3 +521,4 @@ else:
     All reports can be downloaded as Excel files! 📥
 
     """)
+
