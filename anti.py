@@ -97,267 +97,522 @@ if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 if 'all_results' not in st.session_state:
     st.session_state.all_results = {}
+if 'manager_data' not in st.session_state:
+    st.session_state.manager_data = None
+if 'manager_results' not in st.session_state:
+    st.session_state.manager_results = {}
 
 # Sidebar for file upload
 with st.sidebar:
-    st.header("📁 Upload Files")
-    st.markdown("Upload all three required files:")
-    
-    ris_file = st.file_uploader("Upload RIS.csv", type=['csv'], key='ris')
-    state_fc_file = st.file_uploader("Upload State FC Cluster.xlsx", type=['xlsx', 'xls'], key='statefc')
-    purchase_file = st.file_uploader("Upload PM.xlsx", type=['xlsx', 'xls'], key='purchase')
+    st.header("� Select Manager Type")
+    manager_type = st.selectbox(
+        "Choose Manager Type",
+        ["Amazon Manager", "Manager"],
+        index=0
+    )
     
     st.markdown("---")
     
-    # Clear cache button
-    if st.button("🗑️ Clear Cache", use_container_width=True):
-        st.session_state.processed_data = None
-        st.session_state.all_results = {}
-        st.rerun()
+    if manager_type == "Amazon Manager":
+        st.header("�📁 Upload Files")
+        st.markdown("Upload all three required files:")
+        
+        ris_file = st.file_uploader("Upload RIS.csv", type=['csv'], key='ris')
+        state_fc_file = st.file_uploader("Upload State FC Cluster.xlsx", type=['xlsx', 'xls'], key='statefc')
+        purchase_file = st.file_uploader("Upload PM.xlsx", type=['xlsx', 'xls'], key='purchase')
+        
+        st.markdown("---")
+        
+        # Clear cache button
+        if st.button("🗑️ Clear Cache", use_container_width=True):
+            st.session_state.processed_data = None
+            st.session_state.all_results = {}
+            st.session_state.manager_data = None
+            st.session_state.manager_results = {}
+            st.rerun()
+        
+        if st.button("🔄 Process Data", use_container_width=True):
+            if ris_file and state_fc_file and purchase_file:
+                with st.spinner("Processing data..."):
+                    try:
+                        # Read files
+                        ris_df = pd.read_csv(ris_file)
+                        state_fc_df = pd.read_excel(state_fc_file, sheet_name="Sheet2")
+                        purchase_df = pd.read_excel(purchase_file)
+                        
+                        # Rename columns in state_fc_df
+                        state_fc_df = state_fc_df.rename(columns={
+                            state_fc_df.columns[0]: "FC",
+                            state_fc_df.columns[1]: "FC State",
+                            state_fc_df.columns[2]: "FC Cluster",
+                            state_fc_df.columns[3]: "FC State Cluster"
+                        })
+                        
+                        # Create mappings
+                        fc_state_map = dict(zip(state_fc_df["FC"], state_fc_df["FC State"]))
+                        fc_cluster_map = dict(zip(state_fc_df["FC"], state_fc_df["FC Cluster"]))
+                        fc_state_cluster_map = dict(zip(state_fc_df["FC"], state_fc_df["FC State Cluster"]))
+                        
+                        # Map FC data to RIS
+                        ris_df["FC State"] = ris_df["FC"].map(fc_state_map)
+                        ris_df["FC Cluster"] = ris_df["FC"].map(fc_cluster_map)
+                        ris_df["FC State Cluster"] = ris_df["FC"].map(fc_state_cluster_map)
+                        
+                        # Normalize SKUs
+                        purchase_df["Amazon Sku Name"] = purchase_df["Amazon Sku Name"].apply(normalize_sku)
+                        ris_df["Merchant SKU"] = ris_df["Merchant SKU"].apply(normalize_sku)
+                        
+                        # Create product mappings
+                        asin_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["ASIN"]))
+                        vendor_sku_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Vendor SKU Codes"]))
+                        brand_manager_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Brand Manager"]))
+                        brand_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Brand"]))
+                        product_name_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Product Name"]))
+                        
+                        # Map product data to RIS
+                        ris_df["ASIN"] = ris_df["Merchant SKU"].map(asin_map)
+                        ris_df["Vendor SKU"] = ris_df["Merchant SKU"].map(vendor_sku_map)
+                        ris_df["Brand"] = ris_df["Merchant SKU"].map(brand_map)
+                        ris_df["Brand Manager"] = ris_df["Merchant SKU"].map(brand_manager_map)
+                        ris_df["Product Name"] = ris_df["Merchant SKU"].map(product_name_map)
+                        
+                        # Normalize shipping state
+                        ris_df["Shipping State Corrected"] = ris_df.apply(
+                            lambda x: normalize_shipping_state(x["Shipping State"], x["FC State"], STATE_RULES),
+                            axis=1
+                        )
+                        
+                        # Calculate RIS Status
+                        ris_df["RIS Status"] = np.where(
+                            ris_df["Shipping State Corrected"].str.upper().str.strip() == 
+                            ris_df["FC State"].str.upper().str.strip(),
+                            "RIS",
+                            "Non RIS"
+                        )
+                        
+                        # Convert all object columns to string to avoid PyArrow serialization errors
+                        for col in ris_df.columns:
+                            if ris_df[col].dtype == 'object':
+                                ris_df[col] = ris_df[col].astype(str)
+                        
+                        # Store processed data
+                        st.session_state.processed_data = ris_df
+                        
+                        # Generate all pivots
+                        results = {}
+                        
+                        # 1. Brand-wise RIS
+                        brand_wise = pd.pivot_table(
+                            ris_df, index="Brand", columns="RIS Status",
+                            values="Shipped Quantity", aggfunc="sum", fill_value=0
+                        ).reset_index()
+                        # Ensure columns exist
+                        if "RIS" not in brand_wise.columns:
+                            brand_wise["RIS"] = 0
+                        if "Non RIS" not in brand_wise.columns:
+                            brand_wise["Non RIS"] = 0
+                        brand_wise["Grand Total"] = brand_wise["RIS"] + brand_wise["Non RIS"]
+                        brand_wise["RIS %"] = ((brand_wise["RIS"] / brand_wise["Grand Total"]) * 100).round(2)
+                        brand_wise["Non RIS %"] = ((brand_wise["Non RIS"] / brand_wise["Grand Total"]) * 100).round(2)
+                        # Add Grand Total row
+                        grand_total_row = pd.DataFrame({
+                            "Brand": ["Grand Total"],
+                            "RIS": [brand_wise["RIS"].sum()],
+                            "Non RIS": [brand_wise["Non RIS"].sum()],
+                            "Grand Total": [brand_wise["Grand Total"].sum()],
+                            "RIS %": [round((brand_wise["RIS"].sum() / brand_wise["Grand Total"].sum()) * 100, 2)],
+                            "Non RIS %": [round((brand_wise["Non RIS"].sum() / brand_wise["Grand Total"].sum()) * 100, 2)]
+                        })
+                        brand_wise = pd.concat([brand_wise, grand_total_row], ignore_index=True)
+                        results['brand_wise'] = brand_wise
+                        
+                        # 2. ASIN-wise RIS
+                        asin_wise = pd.pivot_table(
+                            ris_df, index=["ASIN", "Brand"], columns="RIS Status",
+                            values="Shipped Quantity", aggfunc="sum", fill_value=0
+                        ).reset_index()
+                        if "RIS" not in asin_wise.columns:
+                            asin_wise["RIS"] = 0
+                        if "Non RIS" not in asin_wise.columns:
+                            asin_wise["Non RIS"] = 0
+                        asin_wise["Grand Total"] = asin_wise["RIS"] + asin_wise["Non RIS"]
+                        asin_wise["RIS %"] = ((asin_wise["RIS"] / asin_wise["Grand Total"]) * 100).round(2)
+                        asin_wise["Non RIS %"] = ((asin_wise["Non RIS"] / asin_wise["Grand Total"]) * 100).round(2)
+                        # Add Grand Total row
+                        grand_total_row = pd.DataFrame({
+                            "ASIN": ["Grand Total"],
+                            "Brand": [""],
+                            "RIS": [asin_wise["RIS"].sum()],
+                            "Non RIS": [asin_wise["Non RIS"].sum()],
+                            "Grand Total": [asin_wise["Grand Total"].sum()],
+                            "RIS %": [round((asin_wise["RIS"].sum() / asin_wise["Grand Total"].sum()) * 100, 2)],
+                            "Non RIS %": [round((asin_wise["Non RIS"].sum() / asin_wise["Grand Total"].sum()) * 100, 2)]
+                        })
+                        asin_wise = pd.concat([asin_wise, grand_total_row], ignore_index=True)
+                        results['asin_wise'] = asin_wise
+                        
+                        # 3. Cluster-wise RIS
+                        cluster_wise = pd.pivot_table(
+                            ris_df, index="FC Cluster", columns="RIS Status",
+                            values="Shipped Quantity", aggfunc="sum", fill_value=0
+                        ).reset_index()
+                        if "RIS" not in cluster_wise.columns:
+                            cluster_wise["RIS"] = 0
+                        if "Non RIS" not in cluster_wise.columns:
+                            cluster_wise["Non RIS"] = 0
+                        cluster_wise["Grand Total"] = cluster_wise["RIS"] + cluster_wise["Non RIS"]
+                        cluster_wise["RIS %"] = ((cluster_wise["RIS"] / cluster_wise["Grand Total"]) * 100).round(2)
+                        cluster_wise["Non RIS %"] = ((cluster_wise["Non RIS"] / cluster_wise["Grand Total"]) * 100).round(2)
+                        # Add Grand Total row
+                        grand_total_row = pd.DataFrame({
+                            "FC Cluster": ["Grand Total"],
+                            "RIS": [cluster_wise["RIS"].sum()],
+                            "Non RIS": [cluster_wise["Non RIS"].sum()],
+                            "Grand Total": [cluster_wise["Grand Total"].sum()],
+                            "RIS %": [round((cluster_wise["RIS"].sum() / cluster_wise["Grand Total"].sum()) * 100, 2)],
+                            "Non RIS %": [round((cluster_wise["Non RIS"].sum() / cluster_wise["Grand Total"].sum()) * 100, 2)]
+                        })
+                        cluster_wise = pd.concat([cluster_wise, grand_total_row], ignore_index=True)
+                        results['cluster_wise'] = cluster_wise
+                        
+                        # 4. Cluster-Brand pivot WITH GRAND TOTAL
+                        cluster_brand = pd.pivot_table(
+                            ris_df, index=["FC Cluster", "Brand"], columns="RIS Status",
+                            values="Shipped Quantity", aggfunc="sum", fill_value=0
+                        ).reset_index()
+                        if "RIS" not in cluster_brand.columns:
+                            cluster_brand["RIS"] = 0
+                        if "Non RIS" not in cluster_brand.columns:
+                            cluster_brand["Non RIS"] = 0
+                        # Ensure numeric types
+                        cluster_brand["RIS"] = pd.to_numeric(cluster_brand["RIS"], errors='coerce').fillna(0)
+                        cluster_brand["Non RIS"] = pd.to_numeric(cluster_brand["Non RIS"], errors='coerce').fillna(0)
+                        cluster_brand["Grand Total"] = cluster_brand["RIS"] + cluster_brand["Non RIS"]
+                        cluster_brand["RIS %"] = ((cluster_brand["RIS"] / cluster_brand["Grand Total"]) * 100).round(2).fillna(0)
+                        cluster_brand["Non RIS %"] = ((cluster_brand["Non RIS"] / cluster_brand["Grand Total"]) * 100).round(2).fillna(0)
+                        
+                        # Calculate Grand Total from original data
+                        total_ris = float(cluster_brand["RIS"].sum())
+                        total_non_ris = float(cluster_brand["Non RIS"].sum())
+                        total_grand = total_ris + total_non_ris
+                        
+                        # Add Grand Total row
+                        grand_total_row = pd.DataFrame({
+                            "FC Cluster": ["Grand Total"],
+                            "Brand": [""],
+                            "RIS": [total_ris],
+                            "Non RIS": [total_non_ris],
+                            "Grand Total": [total_grand],
+                            "RIS %": [round((total_ris / total_grand) * 100, 2) if total_grand > 0 else 0],
+                            "Non RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
+                        })
+                        cluster_brand = pd.concat([cluster_brand, grand_total_row], ignore_index=True)
+                        results['cluster_brand'] = cluster_brand
+                        
+                        # 5. State Cluster-wise RIS
+                        state_cluster = pd.pivot_table(
+                            ris_df, index="FC State Cluster", columns="RIS Status",
+                            values="Shipped Quantity", aggfunc="sum", fill_value=0
+                        ).reset_index()
+                        if "RIS" not in state_cluster.columns:
+                            state_cluster["RIS"] = 0
+                        if "Non RIS" not in state_cluster.columns:
+                            state_cluster["Non RIS"] = 0
+                        state_cluster["Grand Total"] = state_cluster["RIS"] + state_cluster["Non RIS"]
+                        state_cluster["RIS %"] = ((state_cluster["RIS"] / state_cluster["Grand Total"]) * 100).round(2)
+                        state_cluster["Non RIS %"] = ((state_cluster["Non RIS"] / state_cluster["Grand Total"]) * 100).round(2)
+                        # Add Grand Total row
+                        grand_total_row = pd.DataFrame({
+                            "FC State Cluster": ["Grand Total"],
+                            "RIS": [state_cluster["RIS"].sum()],
+                            "Non RIS": [state_cluster["Non RIS"].sum()],
+                            "Grand Total": [state_cluster["Grand Total"].sum()],
+                            "RIS %": [round((state_cluster["RIS"].sum() / state_cluster["Grand Total"].sum()) * 100, 2)],
+                            "Non RIS %": [round((state_cluster["Non RIS"].sum() / state_cluster["Grand Total"].sum()) * 100, 2)]
+                        })
+                        state_cluster = pd.concat([state_cluster, grand_total_row], ignore_index=True)
+                        results['state_cluster'] = state_cluster
+                        
+                        # 6. State-FC pivot WITH GRAND TOTAL
+                        state_fc = pd.pivot_table(
+                            ris_df, index=["FC State Cluster", "FC Cluster"], columns="RIS Status",
+                            values="Shipped Quantity", aggfunc="sum", fill_value=0
+                        ).reset_index()
+                        if "RIS" not in state_fc.columns:
+                            state_fc["RIS"] = 0
+                        if "Non RIS" not in state_fc.columns:
+                            state_fc["Non RIS"] = 0
+                        # Ensure numeric types
+                        state_fc["RIS"] = pd.to_numeric(state_fc["RIS"], errors='coerce').fillna(0)
+                        state_fc["Non RIS"] = pd.to_numeric(state_fc["Non RIS"], errors='coerce').fillna(0)
+                        state_fc["Grand Total"] = state_fc["RIS"] + state_fc["Non RIS"]
+                        state_fc["RIS %"] = ((state_fc["RIS"] / state_fc["Grand Total"]) * 100).round(2).fillna(0)
+                        state_fc["Non RIS %"] = ((state_fc["Non RIS"] / state_fc["Grand Total"]) * 100).round(2).fillna(0)
+                        
+                        # Calculate Grand Total from original data
+                        total_ris = float(state_fc["RIS"].sum())
+                        total_non_ris = float(state_fc["Non RIS"].sum())
+                        total_grand = total_ris + total_non_ris
+                        
+                        # Add Grand Total row
+                        grand_total_row = pd.DataFrame({
+                            "FC State Cluster": ["Grand Total"],
+                            "FC Cluster": [""],
+                            "RIS": [total_ris],
+                            "Non RIS": [total_non_ris],
+                            "Grand Total": [total_grand],
+                            "RIS %": [round((total_ris / total_grand) * 100, 2) if total_grand > 0 else 0],
+                            "Non RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
+                        })
+                        state_fc = pd.concat([state_fc, grand_total_row], ignore_index=True)
+                        results['state_fc'] = state_fc
+                        
+                        st.session_state.all_results = results
+                        st.success("✅ Data processed successfully!")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error processing files: {str(e)}")
+            else:
+                st.warning("⚠️ Please upload all three files first!")
     
-    if st.button("🔄 Process Data", use_container_width=True):
-        if ris_file and state_fc_file and purchase_file:
-            with st.spinner("Processing data..."):
-                try:
-                    # Read files
-                    ris_df = pd.read_csv(ris_file)
-                    state_fc_df = pd.read_excel(state_fc_file, sheet_name="Sheet2")
-                    purchase_df = pd.read_excel(purchase_file)
-                    
-                    # Rename columns in state_fc_df
-                    state_fc_df = state_fc_df.rename(columns={
-                        state_fc_df.columns[0]: "FC",
-                        state_fc_df.columns[1]: "FC State",
-                        state_fc_df.columns[2]: "FC Cluster",
-                        state_fc_df.columns[3]: "FC State Cluster"
-                    })
-                    
-                    # Create mappings
-                    fc_state_map = dict(zip(state_fc_df["FC"], state_fc_df["FC State"]))
-                    fc_cluster_map = dict(zip(state_fc_df["FC"], state_fc_df["FC Cluster"]))
-                    fc_state_cluster_map = dict(zip(state_fc_df["FC"], state_fc_df["FC State Cluster"]))
-                    
-                    # Map FC data to RIS
-                    ris_df["FC State"] = ris_df["FC"].map(fc_state_map)
-                    ris_df["FC Cluster"] = ris_df["FC"].map(fc_cluster_map)
-                    ris_df["FC State Cluster"] = ris_df["FC"].map(fc_state_cluster_map)
-                    
-                    # Normalize SKUs
-                    purchase_df["Amazon Sku Name"] = purchase_df["Amazon Sku Name"].apply(normalize_sku)
-                    ris_df["Merchant SKU"] = ris_df["Merchant SKU"].apply(normalize_sku)
-                    
-                    # Create product mappings
-                    asin_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["ASIN"]))
-                    vendor_sku_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Vendor SKU Codes"]))
-                    brand_manager_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Brand Manager"]))
-                    brand_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Brand"]))
-                    product_name_map = dict(zip(purchase_df["Amazon Sku Name"], purchase_df["Product Name"]))
-                    
-                    # Map product data to RIS
-                    ris_df["ASIN"] = ris_df["Merchant SKU"].map(asin_map)
-                    ris_df["Vendor SKU"] = ris_df["Merchant SKU"].map(vendor_sku_map)
-                    ris_df["Brand"] = ris_df["Merchant SKU"].map(brand_map)
-                    ris_df["Brand Manager"] = ris_df["Merchant SKU"].map(brand_manager_map)
-                    ris_df["Product Name"] = ris_df["Merchant SKU"].map(product_name_map)
-                    
-                    # Normalize shipping state
-                    ris_df["Shipping State Corrected"] = ris_df.apply(
-                        lambda x: normalize_shipping_state(x["Shipping State"], x["FC State"], STATE_RULES),
-                        axis=1
-                    )
-                    
-                    # Calculate RIS Status
-                    ris_df["RIS Status"] = np.where(
-                        ris_df["Shipping State Corrected"].str.upper().str.strip() == 
-                        ris_df["FC State"].str.upper().str.strip(),
-                        "RIS",
-                        "Non RIS"
-                    )
-                    
-                    # Convert all object columns to string to avoid PyArrow serialization errors
-                    for col in ris_df.columns:
-                        if ris_df[col].dtype == 'object':
-                            ris_df[col] = ris_df[col].astype(str)
-                    
-                    # Store processed data
-                    st.session_state.processed_data = ris_df
-                    
-                    # Generate all pivots
-                    results = {}
-                    
-                    # 1. Brand-wise RIS
-                    brand_wise = pd.pivot_table(
-                        ris_df, index="Brand", columns="RIS Status",
-                        values="Shipped Quantity", aggfunc="sum", fill_value=0
-                    ).reset_index()
-                    # Ensure columns exist
-                    if "RIS" not in brand_wise.columns:
-                        brand_wise["RIS"] = 0
-                    if "Non RIS" not in brand_wise.columns:
-                        brand_wise["Non RIS"] = 0
-                    brand_wise["Grand Total"] = brand_wise["RIS"] + brand_wise["Non RIS"]
-                    brand_wise["RIS %"] = ((brand_wise["RIS"] / brand_wise["Grand Total"]) * 100).round(2)
-                    brand_wise["Non RIS %"] = ((brand_wise["Non RIS"] / brand_wise["Grand Total"]) * 100).round(2)
-                    # Add Grand Total row
-                    grand_total_row = pd.DataFrame({
-                        "Brand": ["Grand Total"],
-                        "RIS": [brand_wise["RIS"].sum()],
-                        "Non RIS": [brand_wise["Non RIS"].sum()],
-                        "Grand Total": [brand_wise["Grand Total"].sum()],
-                        "RIS %": [round((brand_wise["RIS"].sum() / brand_wise["Grand Total"].sum()) * 100, 2)],
-                        "Non RIS %": [round((brand_wise["Non RIS"].sum() / brand_wise["Grand Total"].sum()) * 100, 2)]
-                    })
-                    brand_wise = pd.concat([brand_wise, grand_total_row], ignore_index=True)
-                    results['brand_wise'] = brand_wise
-                    
-                    # 2. ASIN-wise RIS
-                    asin_wise = pd.pivot_table(
-                        ris_df, index=["ASIN", "Brand"], columns="RIS Status",
-                        values="Shipped Quantity", aggfunc="sum", fill_value=0
-                    ).reset_index()
-                    if "RIS" not in asin_wise.columns:
-                        asin_wise["RIS"] = 0
-                    if "Non RIS" not in asin_wise.columns:
-                        asin_wise["Non RIS"] = 0
-                    asin_wise["Grand Total"] = asin_wise["RIS"] + asin_wise["Non RIS"]
-                    asin_wise["RIS %"] = ((asin_wise["RIS"] / asin_wise["Grand Total"]) * 100).round(2)
-                    asin_wise["Non RIS %"] = ((asin_wise["Non RIS"] / asin_wise["Grand Total"]) * 100).round(2)
-                    # Add Grand Total row
-                    grand_total_row = pd.DataFrame({
-                        "ASIN": ["Grand Total"],
-                        "Brand": [""],
-                        "RIS": [asin_wise["RIS"].sum()],
-                        "Non RIS": [asin_wise["Non RIS"].sum()],
-                        "Grand Total": [asin_wise["Grand Total"].sum()],
-                        "RIS %": [round((asin_wise["RIS"].sum() / asin_wise["Grand Total"].sum()) * 100, 2)],
-                        "Non RIS %": [round((asin_wise["Non RIS"].sum() / asin_wise["Grand Total"].sum()) * 100, 2)]
-                    })
-                    asin_wise = pd.concat([asin_wise, grand_total_row], ignore_index=True)
-                    results['asin_wise'] = asin_wise
-                    
-                    # 3. Cluster-wise RIS
-                    cluster_wise = pd.pivot_table(
-                        ris_df, index="FC Cluster", columns="RIS Status",
-                        values="Shipped Quantity", aggfunc="sum", fill_value=0
-                    ).reset_index()
-                    if "RIS" not in cluster_wise.columns:
-                        cluster_wise["RIS"] = 0
-                    if "Non RIS" not in cluster_wise.columns:
-                        cluster_wise["Non RIS"] = 0
-                    cluster_wise["Grand Total"] = cluster_wise["RIS"] + cluster_wise["Non RIS"]
-                    cluster_wise["RIS %"] = ((cluster_wise["RIS"] / cluster_wise["Grand Total"]) * 100).round(2)
-                    cluster_wise["Non RIS %"] = ((cluster_wise["Non RIS"] / cluster_wise["Grand Total"]) * 100).round(2)
-                    # Add Grand Total row
-                    grand_total_row = pd.DataFrame({
-                        "FC Cluster": ["Grand Total"],
-                        "RIS": [cluster_wise["RIS"].sum()],
-                        "Non RIS": [cluster_wise["Non RIS"].sum()],
-                        "Grand Total": [cluster_wise["Grand Total"].sum()],
-                        "RIS %": [round((cluster_wise["RIS"].sum() / cluster_wise["Grand Total"].sum()) * 100, 2)],
-                        "Non RIS %": [round((cluster_wise["Non RIS"].sum() / cluster_wise["Grand Total"].sum()) * 100, 2)]
-                    })
-                    cluster_wise = pd.concat([cluster_wise, grand_total_row], ignore_index=True)
-                    results['cluster_wise'] = cluster_wise
-                    
-                    # 4. Cluster-Brand pivot WITH GRAND TOTAL
-                    cluster_brand = pd.pivot_table(
-                        ris_df, index=["FC Cluster", "Brand"], columns="RIS Status",
-                        values="Shipped Quantity", aggfunc="sum", fill_value=0
-                    ).reset_index()
-                    if "RIS" not in cluster_brand.columns:
-                        cluster_brand["RIS"] = 0
-                    if "Non RIS" not in cluster_brand.columns:
-                        cluster_brand["Non RIS"] = 0
-                    # Ensure numeric types
-                    cluster_brand["RIS"] = pd.to_numeric(cluster_brand["RIS"], errors='coerce').fillna(0)
-                    cluster_brand["Non RIS"] = pd.to_numeric(cluster_brand["Non RIS"], errors='coerce').fillna(0)
-                    cluster_brand["Grand Total"] = cluster_brand["RIS"] + cluster_brand["Non RIS"]
-                    cluster_brand["RIS %"] = ((cluster_brand["RIS"] / cluster_brand["Grand Total"]) * 100).round(2).fillna(0)
-                    cluster_brand["Non RIS %"] = ((cluster_brand["Non RIS"] / cluster_brand["Grand Total"]) * 100).round(2).fillna(0)
-                    
-                    # Calculate Grand Total from original data
-                    total_ris = float(cluster_brand["RIS"].sum())
-                    total_non_ris = float(cluster_brand["Non RIS"].sum())
-                    total_grand = total_ris + total_non_ris
-                    
-                    # Add Grand Total row
-                    grand_total_row = pd.DataFrame({
-                        "FC Cluster": ["Grand Total"],
-                        "Brand": [""],
-                        "RIS": [total_ris],
-                        "Non RIS": [total_non_ris],
-                        "Grand Total": [total_grand],
-                        "RIS %": [round((total_ris / total_grand) * 100, 2) if total_grand > 0 else 0],
-                        "Non RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
-                    })
-                    cluster_brand = pd.concat([cluster_brand, grand_total_row], ignore_index=True)
-                    results['cluster_brand'] = cluster_brand
-                    
-                    # 5. State Cluster-wise RIS
-                    state_cluster = pd.pivot_table(
-                        ris_df, index="FC State Cluster", columns="RIS Status",
-                        values="Shipped Quantity", aggfunc="sum", fill_value=0
-                    ).reset_index()
-                    if "RIS" not in state_cluster.columns:
-                        state_cluster["RIS"] = 0
-                    if "Non RIS" not in state_cluster.columns:
-                        state_cluster["Non RIS"] = 0
-                    state_cluster["Grand Total"] = state_cluster["RIS"] + state_cluster["Non RIS"]
-                    state_cluster["RIS %"] = ((state_cluster["RIS"] / state_cluster["Grand Total"]) * 100).round(2)
-                    state_cluster["Non RIS %"] = ((state_cluster["Non RIS"] / state_cluster["Grand Total"]) * 100).round(2)
-                    # Add Grand Total row
-                    grand_total_row = pd.DataFrame({
-                        "FC State Cluster": ["Grand Total"],
-                        "RIS": [state_cluster["RIS"].sum()],
-                        "Non RIS": [state_cluster["Non RIS"].sum()],
-                        "Grand Total": [state_cluster["Grand Total"].sum()],
-                        "RIS %": [round((state_cluster["RIS"].sum() / state_cluster["Grand Total"].sum()) * 100, 2)],
-                        "Non RIS %": [round((state_cluster["Non RIS"].sum() / state_cluster["Grand Total"].sum()) * 100, 2)]
-                    })
-                    state_cluster = pd.concat([state_cluster, grand_total_row], ignore_index=True)
-                    results['state_cluster'] = state_cluster
-                    
-                    # 6. State-FC pivot WITH GRAND TOTAL
-                    state_fc = pd.pivot_table(
-                        ris_df, index=["FC State Cluster", "FC Cluster"], columns="RIS Status",
-                        values="Shipped Quantity", aggfunc="sum", fill_value=0
-                    ).reset_index()
-                    if "RIS" not in state_fc.columns:
-                        state_fc["RIS"] = 0
-                    if "Non RIS" not in state_fc.columns:
-                        state_fc["Non RIS"] = 0
-                    # Ensure numeric types
-                    state_fc["RIS"] = pd.to_numeric(state_fc["RIS"], errors='coerce').fillna(0)
-                    state_fc["Non RIS"] = pd.to_numeric(state_fc["Non RIS"], errors='coerce').fillna(0)
-                    state_fc["Grand Total"] = state_fc["RIS"] + state_fc["Non RIS"]
-                    state_fc["RIS %"] = ((state_fc["RIS"] / state_fc["Grand Total"]) * 100).round(2).fillna(0)
-                    state_fc["Non RIS %"] = ((state_fc["Non RIS"] / state_fc["Grand Total"]) * 100).round(2).fillna(0)
-                    
-                    # Calculate Grand Total from original data
-                    total_ris = float(state_fc["RIS"].sum())
-                    total_non_ris = float(state_fc["Non RIS"].sum())
-                    total_grand = total_ris + total_non_ris
-                    
-                    # Add Grand Total row
-                    grand_total_row = pd.DataFrame({
-                        "FC State Cluster": ["Grand Total"],
-                        "FC Cluster": [""],
-                        "RIS": [total_ris],
-                        "Non RIS": [total_non_ris],
-                        "Grand Total": [total_grand],
-                        "RIS %": [round((total_ris / total_grand) * 100, 2) if total_grand > 0 else 0],
-                        "Non RIS %": [round((total_non_ris / total_grand) * 100, 2) if total_grand > 0 else 0]
-                    })
-                    state_fc = pd.concat([state_fc, grand_total_row], ignore_index=True)
-                    results['state_fc'] = state_fc
-                    
-                    st.session_state.all_results = results
-                    st.success("✅ Data processed successfully!")
-                    
-                except Exception as e:
-                    st.error(f"❌ Error processing files: {str(e)}")
-        else:
-            st.warning("⚠️ Please upload all three files first!")
+    else:
+        # Manager option - Upload RIS Week file and PM file
+        st.header("📁 Upload Manager Files")
+        st.markdown("Upload the required files:")
+        
+        ris_week_file = st.file_uploader("Upload RIS Week File", type=['csv', 'xlsx', 'xls'], key='ris_week')
+        pm_file = st.file_uploader("Upload PM File", type=['xlsx', 'xls'], key='pm_file')
+        
+        st.markdown("---")
+        
+        # Clear cache button
+        if st.button("🗑️ Clear Cache", use_container_width=True, key='manager_clear'):
+            st.session_state.manager_data = None
+            st.session_state.manager_results = {}
+            st.session_state.processed_data = None
+            st.session_state.all_results = {}
+            st.rerun()
+        
+        if st.button("🔄 Process Manager Data", use_container_width=True, key='manager_process'):
+            if ris_week_file and pm_file:
+                with st.spinner("Processing Manager data..."):
+                    try:
+                        # Read RIS Week file (support both CSV and Excel)
+                        if ris_week_file.name.endswith('.csv'):
+                            ris_week_df = pd.read_csv(ris_week_file)
+                        else:
+                            ris_week_df = pd.read_excel(ris_week_file)
+                        
+                        # Read PM file
+                        pm_df = pd.read_excel(pm_file)
+                        
+                        # Calculate Non RIS = total - ris_units
+                        # First, check which columns exist for total and ris_units
+                        total_col = None
+                        ris_col = None
+                        
+                        # Look for total column (case-insensitive search)
+                        for col in ris_week_df.columns:
+                            col_lower = col.lower().replace(" ", "").replace("_", "")
+                            if col_lower in ['total', 'totalunits', 'totalqty', 'totalquantity']:
+                                total_col = col
+                                break
+                        
+                        # Look for RIS units column
+                        for col in ris_week_df.columns:
+                            col_lower = col.lower().replace(" ", "").replace("_", "")
+                            if col_lower in ['risunits', 'ris', 'risqty', 'risquantity', 'ris_units']:
+                                ris_col = col
+                                break
+                        
+                        if total_col and ris_col:
+                            # Convert to numeric and calculate Non RIS
+                            ris_week_df[total_col] = pd.to_numeric(ris_week_df[total_col], errors='coerce').fillna(0)
+                            ris_week_df[ris_col] = pd.to_numeric(ris_week_df[ris_col], errors='coerce').fillna(0)
+                            ris_week_df["Non RIS"] = ris_week_df[total_col] - ris_week_df[ris_col]
+                        else:
+                            st.warning(f"⚠️ Could not find total or ris_units columns. Found columns: {list(ris_week_df.columns)}")
+                        
+                        # Create mappings from PM file using ASIN
+                        # Find ASIN column in both dataframes (case-insensitive)
+                        pm_asin_col = None
+                        ris_asin_col = None
+                        
+                        for col in pm_df.columns:
+                            if col.lower() == 'asin':
+                                pm_asin_col = col
+                                break
+                        
+                        for col in ris_week_df.columns:
+                            if col.lower() == 'asin':
+                                ris_asin_col = col
+                                break
+                        
+                        if pm_asin_col:
+                            pm_df[pm_asin_col] = pm_df[pm_asin_col].astype(str).str.strip().str.upper()
+                        
+                        if ris_asin_col:
+                            ris_week_df[ris_asin_col] = ris_week_df[ris_asin_col].astype(str).str.strip().str.upper()
+                        
+                            # Create mappings
+                            brand_map = dict(zip(pm_df[pm_asin_col], pm_df["Brand"])) if "Brand" in pm_df.columns else {}
+                            brand_manager_map = dict(zip(pm_df[pm_asin_col], pm_df["Brand Manager"])) if "Brand Manager" in pm_df.columns else {}
+                            vendor_sku_map = dict(zip(pm_df[pm_asin_col], pm_df["Vendor SKU Codes"])) if "Vendor SKU Codes" in pm_df.columns else {}
+                            
+                            ris_week_df["Brand"] = ris_week_df[ris_asin_col].map(brand_map)
+                            ris_week_df["Brand Manager"] = ris_week_df[ris_asin_col].map(brand_manager_map)
+                            ris_week_df["Vendor SKU Codes"] = ris_week_df[ris_asin_col].map(vendor_sku_map)
+                        else:
+                            st.warning(f"⚠️ ASIN column not found in RIS Week file. Found columns: {list(ris_week_df.columns)}")
+                        
+                        # Convert all object columns to string
+                        for col in ris_week_df.columns:
+                            if ris_week_df[col].dtype == 'object':
+                                ris_week_df[col] = ris_week_df[col].astype(str)
+                        
+                        # Store the processed data in session state
+                        st.session_state.manager_data = ris_week_df
+                        
+                        # Generate pivot tables for Manager
+                        manager_results = {}
+                        
+                        # Find column names (case-insensitive)
+                        ris_units_col = None
+                        total_units_col = None
+                        cluster_col = None
+                        brand_col = None
+                        asin_col_for_pivot = ris_asin_col  # Use the already found ASIN column
+                        
+                        for col in ris_week_df.columns:
+                            col_lower = col.lower().replace(" ", "").replace("_", "")
+                            if col_lower in ['risunits', 'ris', 'risqty', 'risquantity', 'risunit']:
+                                ris_units_col = col
+                            if col_lower in ['total', 'totalunits', 'totalqty', 'totalquantity', 'totalunit']:
+                                total_units_col = col
+                            if col_lower in ['custcluster', 'cluster', 'customercluster']:
+                                cluster_col = col
+                            if col_lower in ['brand', 'merchantbrandname', 'brandname']:
+                                brand_col = col
+                            if col_lower == 'asin' and not asin_col_for_pivot:
+                                asin_col_for_pivot = col
+                        
+                        # 1. Brand-wise Pivot
+                        if brand_col and ris_units_col and total_units_col and "Non RIS" in ris_week_df.columns:
+                            # Convert columns to numeric for aggregation
+                            ris_week_df[ris_units_col] = pd.to_numeric(ris_week_df[ris_units_col], errors='coerce').fillna(0)
+                            ris_week_df["Non RIS"] = pd.to_numeric(ris_week_df["Non RIS"], errors='coerce').fillna(0)
+                            ris_week_df[total_units_col] = pd.to_numeric(ris_week_df[total_units_col], errors='coerce').fillna(0)
+                            
+                            brand_pivot = ris_week_df.groupby(brand_col).agg({
+                                ris_units_col: 'sum',
+                                'Non RIS': 'sum',
+                                total_units_col: 'sum'
+                            }).reset_index()
+                            brand_pivot.columns = ["Brand", "RIS Units", "Non RIS", "Total Units"]
+                            # Calculate percentages
+                            brand_pivot["RIS %"] = ((brand_pivot["RIS Units"] / brand_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            brand_pivot["Non RIS %"] = ((brand_pivot["Non RIS"] / brand_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            # Add Grand Total
+                            total_ris = brand_pivot["RIS Units"].sum()
+                            total_non_ris = brand_pivot["Non RIS"].sum()
+                            total_units = brand_pivot["Total Units"].sum()
+                            grand_total = pd.DataFrame({
+                                "Brand": ["Grand Total"],
+                                "RIS Units": [total_ris],
+                                "Non RIS": [total_non_ris],
+                                "Total Units": [total_units],
+                                "RIS %": [round((total_ris / total_units) * 100, 2) if total_units > 0 else 0],
+                                "Non RIS %": [round((total_non_ris / total_units) * 100, 2) if total_units > 0 else 0]
+                            })
+                            brand_pivot = pd.concat([brand_pivot, grand_total], ignore_index=True)
+                            manager_results['brand_wise'] = brand_pivot
+                        
+                        # 2. ASIN-wise Pivot
+                        if asin_col_for_pivot and ris_units_col and total_units_col and "Non RIS" in ris_week_df.columns:
+                            asin_pivot = ris_week_df.groupby(asin_col_for_pivot).agg({
+                                ris_units_col: 'sum',
+                                'Non RIS': 'sum',
+                                total_units_col: 'sum'
+                            }).reset_index()
+                            asin_pivot.columns = ["ASIN", "RIS Units", "Non RIS", "Total Units"]
+                            # Calculate percentages
+                            asin_pivot["RIS %"] = ((asin_pivot["RIS Units"] / asin_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            asin_pivot["Non RIS %"] = ((asin_pivot["Non RIS"] / asin_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            # Add Grand Total
+                            total_ris = asin_pivot["RIS Units"].sum()
+                            total_non_ris = asin_pivot["Non RIS"].sum()
+                            total_units = asin_pivot["Total Units"].sum()
+                            grand_total = pd.DataFrame({
+                                "ASIN": ["Grand Total"],
+                                "RIS Units": [total_ris],
+                                "Non RIS": [total_non_ris],
+                                "Total Units": [total_units],
+                                "RIS %": [round((total_ris / total_units) * 100, 2) if total_units > 0 else 0],
+                                "Non RIS %": [round((total_non_ris / total_units) * 100, 2) if total_units > 0 else 0]
+                            })
+                            asin_pivot = pd.concat([asin_pivot, grand_total], ignore_index=True)
+                            manager_results['asin_wise'] = asin_pivot
+                        
+                        # 3. Cluster-wise Pivot
+                        if cluster_col and ris_units_col and total_units_col and "Non RIS" in ris_week_df.columns:
+                            cluster_pivot = ris_week_df.groupby(cluster_col).agg({
+                                ris_units_col: 'sum',
+                                'Non RIS': 'sum',
+                                total_units_col: 'sum'
+                            }).reset_index()
+                            cluster_pivot.columns = ["Cluster", "RIS Units", "Non RIS", "Total Units"]
+                            # Calculate percentages
+                            cluster_pivot["RIS %"] = ((cluster_pivot["RIS Units"] / cluster_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            cluster_pivot["Non RIS %"] = ((cluster_pivot["Non RIS"] / cluster_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            # Add Grand Total
+                            total_ris = cluster_pivot["RIS Units"].sum()
+                            total_non_ris = cluster_pivot["Non RIS"].sum()
+                            total_units = cluster_pivot["Total Units"].sum()
+                            grand_total = pd.DataFrame({
+                                "Cluster": ["Grand Total"],
+                                "RIS Units": [total_ris],
+                                "Non RIS": [total_non_ris],
+                                "Total Units": [total_units],
+                                "RIS %": [round((total_ris / total_units) * 100, 2) if total_units > 0 else 0],
+                                "Non RIS %": [round((total_non_ris / total_units) * 100, 2) if total_units > 0 else 0]
+                            })
+                            cluster_pivot = pd.concat([cluster_pivot, grand_total], ignore_index=True)
+                            manager_results['cluster_wise'] = cluster_pivot
+                        
+                        # 4. Cluster-ASIN Pivot
+                        if cluster_col and asin_col_for_pivot and ris_units_col and total_units_col and "Non RIS" in ris_week_df.columns:
+                            cluster_asin_pivot = ris_week_df.groupby([cluster_col, asin_col_for_pivot]).agg({
+                                ris_units_col: 'sum',
+                                'Non RIS': 'sum',
+                                total_units_col: 'sum'
+                            }).reset_index()
+                            cluster_asin_pivot.columns = ["Cluster", "ASIN", "RIS Units", "Non RIS", "Total Units"]
+                            # Calculate percentages
+                            cluster_asin_pivot["RIS %"] = ((cluster_asin_pivot["RIS Units"] / cluster_asin_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            cluster_asin_pivot["Non RIS %"] = ((cluster_asin_pivot["Non RIS"] / cluster_asin_pivot["Total Units"]) * 100).round(2).fillna(0)
+                            # Add Grand Total
+                            total_ris = cluster_asin_pivot["RIS Units"].sum()
+                            total_non_ris = cluster_asin_pivot["Non RIS"].sum()
+                            total_units = cluster_asin_pivot["Total Units"].sum()
+                            grand_total = pd.DataFrame({
+                                "Cluster": ["Grand Total"],
+                                "ASIN": [""],
+                                "RIS Units": [total_ris],
+                                "Non RIS": [total_non_ris],
+                                "Total Units": [total_units],
+                                "RIS %": [round((total_ris / total_units) * 100, 2) if total_units > 0 else 0],
+                                "Non RIS %": [round((total_non_ris / total_units) * 100, 2) if total_units > 0 else 0]
+                            })
+                            cluster_asin_pivot = pd.concat([cluster_asin_pivot, grand_total], ignore_index=True)
+                            manager_results['cluster_asin'] = cluster_asin_pivot
+                        
+                        st.session_state.manager_results = manager_results
+                        st.success("✅ Manager data processed successfully!")
+                        
+                    except Exception as e:
+                        st.error(f"❌ Error processing files: {str(e)}")
+            else:
+                st.warning("⚠️ Please upload both RIS Week file and PM file!")
 
 # Main content area
 if st.session_state.processed_data is not None:
@@ -477,6 +732,111 @@ if st.session_state.processed_data is not None:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
+
+elif st.session_state.manager_data is not None:
+    # Manager Data Display with Tabs
+    manager_tabs = st.tabs([
+        "📋 Processed Data",
+        "🏷️ Brand-wise",
+        "🔖 ASIN-wise",
+        "🏢 Cluster-wise",
+        "📊 Cluster-ASIN"
+    ])
+    
+    # Tab 1: Processed Data
+    with manager_tabs[0]:
+        st.header("📊 Manager RIS Week Data")
+        df = st.session_state.manager_data
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Records", f"{len(df):,}")
+        with col2:
+            if "Non RIS" in df.columns:
+                non_ris_total = pd.to_numeric(df["Non RIS"], errors='coerce').sum()
+                st.metric("Total Non RIS", f"{non_ris_total:,.0f}")
+        with col3:
+            # Find the RIS column
+            ris_col = None
+            for col in df.columns:
+                col_lower = col.lower().replace(" ", "").replace("_", "")
+                if col_lower in ['risunits', 'ris', 'risqty', 'risquantity', 'ris_units']:
+                    ris_col = col
+                    break
+            if ris_col:
+                ris_total = pd.to_numeric(df[ris_col], errors='coerce').sum()
+                st.metric("Total RIS", f"{ris_total:,.0f}")
+        
+        st.markdown("---")
+        st.dataframe(df, use_container_width=True, height=500)
+        
+        st.download_button(
+            label="📥 Download Manager RIS Data (Excel)",
+            data=to_excel(df),
+            file_name="manager_ris_week_data.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    
+    # Tab 2: Brand-wise Pivot
+    with manager_tabs[1]:
+        st.header("🏷️ Brand-wise Analysis")
+        if 'brand_wise' in st.session_state.manager_results:
+            df = st.session_state.manager_results['brand_wise']
+            st.dataframe(df, use_container_width=True, height=400)
+            st.download_button(
+                label="📥 Download Brand-wise Analysis (Excel)",
+                data=to_excel(df),
+                file_name="manager_brand_wise.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ Brand-wise pivot not available. Ensure Brand column is mapped from PM file.")
+    
+    # Tab 3: ASIN-wise Pivot
+    with manager_tabs[2]:
+        st.header("🔖 ASIN-wise Analysis")
+        if 'asin_wise' in st.session_state.manager_results:
+            df = st.session_state.manager_results['asin_wise']
+            st.dataframe(df, use_container_width=True, height=400)
+            st.download_button(
+                label="📥 Download ASIN-wise Analysis (Excel)",
+                data=to_excel(df),
+                file_name="manager_asin_wise.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ ASIN-wise pivot not available. Ensure ASIN column exists in RIS Week file.")
+    
+    # Tab 4: Cluster-wise Pivot
+    with manager_tabs[3]:
+        st.header("🏢 Cluster-wise Analysis")
+        if 'cluster_wise' in st.session_state.manager_results:
+            df = st.session_state.manager_results['cluster_wise']
+            st.dataframe(df, use_container_width=True, height=400)
+            st.download_button(
+                label="📥 Download Cluster-wise Analysis (Excel)",
+                data=to_excel(df),
+                file_name="manager_cluster_wise.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ Cluster-wise pivot not available. Ensure cust_cluster column exists in RIS Week file.")
+    
+    # Tab 5: Cluster-ASIN Pivot
+    with manager_tabs[4]:
+        st.header("📊 Cluster-ASIN Analysis")
+        if 'cluster_asin' in st.session_state.manager_results:
+            df = st.session_state.manager_results['cluster_asin']
+            st.dataframe(df, use_container_width=True, height=400)
+            st.download_button(
+                label="📥 Download Cluster-ASIN Analysis (Excel)",
+                data=to_excel(df),
+                file_name="manager_cluster_asin.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ Cluster-ASIN pivot not available. Ensure both cust_cluster and ASIN columns exist.")
+
 else:
     # Welcome screen
     st.info("👋 Welcome! Please upload the required files using the sidebar to begin analysis.")
@@ -510,15 +870,20 @@ else:
     st.markdown("---")
     st.markdown("""
     ### 📊 Analysis Features:
-    - **Processed Data**: Complete dataset with RIS status calculations
-    - **Brand-wise RIS**: Performance metrics by brand
-    - **ASIN-wise RIS**: Product-level analysis
-    - **Cluster-wise RIS**: FC cluster performance
-    - **Cluster-Brand Analysis**: Combined cluster and brand insights (with Grand Total)
-    - **State Cluster Analysis**: State-level cluster metrics
-    - **State-FC Analysis**: Detailed state and FC mapping (with Grand Total)
+    
+    **Amazon Manager:**
+    - Processed Data: Complete dataset with RIS status calculations
+    - Brand-wise RIS: Performance metrics by brand
+    - ASIN-wise RIS: Product-level analysis
+    - Cluster-wise RIS: FC cluster performance
+    - Cluster-Brand Analysis: Combined cluster and brand insights
+    - State Cluster Analysis: State-level cluster metrics
+    - State-FC Analysis: Detailed state and FC mapping
+    
+    **Manager:**
+    - RIS Week Data with Non RIS calculations
+    - Brand, Brand Manager, Vendor SKU mappings from PM file
     
     All reports can be downloaded as Excel files! 📥
 
     """)
-
