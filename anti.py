@@ -107,13 +107,13 @@ with st.sidebar:
     st.header("� Select Manager Type")
     manager_type = st.selectbox(
         "Choose Manager Type",
-        ["Amazon Manager", "Manager"],
+        ["Portal", "Manager"],
         index=0
     )
     
     st.markdown("---")
     
-    if manager_type == "Amazon Manager":
+    if manager_type == "Portal":
         st.header("�📁 Upload Files")
         st.markdown("Upload all three required files:")
         
