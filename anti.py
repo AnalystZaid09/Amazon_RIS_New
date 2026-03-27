@@ -39,7 +39,8 @@ st.markdown("""
 def clean_text(x):
     if pd.isna(x):
         return ""
-    return re.sub(r"\s+", "", str(x).lower())
+    # Remove all non-alphanumeric characters for robust matching
+    return re.sub(r"[^a-z0-9]", "", str(x).lower())
 
 def normalize_sku(x):
     if pd.isna(x):
@@ -47,13 +48,19 @@ def normalize_sku(x):
     return str(x).strip().upper().replace(" ", "")
 
 def normalize_shipping_state(shipping_state, fc_state, state_rules):
+    if pd.isna(fc_state):
+        return shipping_state
+        
     ship = clean_text(shipping_state)
-    fc = str(fc_state).strip()
+    target_fc_clean = clean_text(fc_state)
     
-    if fc in state_rules:
-        for variant in state_rules[fc]:
-            if ship == clean_text(variant):
-                return fc
+    # Iterate through all rules to find a match for the FC state (case-insensitive)
+    for rule_fc, variants in state_rules.items():
+        if target_fc_clean == clean_text(rule_fc):
+            # Check if the shipping state matches any of the allowed variants for this FC
+            for variant in variants:
+                if ship == clean_text(variant):
+                    return rule_fc
     
     return shipping_state
 
@@ -72,11 +79,11 @@ def to_excel(df):
 STATE_RULES = {
     "Delhi": ["delhi", "dl", "newdelhi", "nctdelhi", "haryana", "harayana", "hr"],
     "Haryana": ["haryana", "harayana", "hr", "delhi", "dl", "newdelhi", "nctdelhi", "chandigarh", "chd"],
-    "Karnataka": ["karnataka", "ka", "bangalore", "bengaluru"],
+    "Karnataka": ["karnataka", "ka", "bangalore", "bengaluru", "karnaraka", "karnaka"],
     "Madhya Pradesh": ["madhyapradesh", "mp", "indore", "bhopal"],
-    "Maharashtra": ["maharashtra", "mh", "dadra", "nagarhaveli", "dadra&nagarhaveli", "dnh"],
+    "Maharashtra": ["maharashtra", "mh", "dadra", "nagarhaveli", "dadra&nagarhaveli", "dnh", "maharastra"],
     "Uttar Pradesh": ["uttarpradesh", "up"],
-    "Telangana": ["telangana", "tg", "hyderabad"],
+    "Telangana": ["telangana", "tg", "hyderabad", "telanagana", "telengana", "telagana", "hyderabadtelangana"],
     "West Bengal": ["westbengal", "wb", "kolkata"],
     "Punjab": ["punjab", "pb", "chandigarh", "chd"],
     "Kerala": ["kerala", "kl", "trivandrum", "thiruvananthapuram"],
@@ -84,7 +91,7 @@ STATE_RULES = {
     "Tamil Nadu": ["tamilnadu", "tn", "chennai"],
     "Gujarat": ["gujarat", "gj", "ahmedabad", "surat"],
     "Rajasthan": ["rajasthan", "rj", "jaipur"],
-    "Anadhra Pradesh": ["andhrapradesh", "ap", "visakhapatnam", "vizag"],
+    "Andhra Pradesh": ["andhrapradesh", "ap", "visakhapatnam", "vizag"],
     "Bihar": ["bihar", "br", "patna"],
 }
 
