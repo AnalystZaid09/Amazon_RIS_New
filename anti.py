@@ -108,13 +108,17 @@ if 'manager_data' not in st.session_state:
     st.session_state.manager_data = None
 if 'manager_results' not in st.session_state:
     st.session_state.manager_results = {}
+if 'samriddhi_data' not in st.session_state:
+    st.session_state.samriddhi_data = None
+if 'samriddhi_results' not in st.session_state:
+    st.session_state.samriddhi_results = {}
 
 # Sidebar for file upload
 with st.sidebar:
     st.header("� Select Manager Type")
     manager_type = st.selectbox(
         "Choose Manager Type",
-        ["Portal", "Manager"],
+        ["Portal", "Manager", "RIS Samriddhi"],
         index=0
     )
     
@@ -382,7 +386,7 @@ with st.sidebar:
             else:
                 st.warning("⚠️ Please upload all three files first!")
     
-    else:
+    elif manager_type == "Manager":
         # Manager option - Upload RIS Week file and PM file
         st.header("📁 Upload Manager Files")
         st.markdown("Upload the required files:")
@@ -621,6 +625,182 @@ with st.sidebar:
             else:
                 st.warning("⚠️ Please upload both RIS Week file and PM file!")
 
+    elif manager_type == "RIS Samriddhi":
+        st.header("📋 Upload Samriddhi Files")
+        st.markdown("Upload the required files:")
+        
+        samriddhi_file = st.file_uploader("Upload Samriddhi File (CSV)", type=['csv'], key='samriddhi_file')
+        pm_file_samriddhi = st.file_uploader("Upload PM File (Excel)", type=['xlsx', 'xls'], key='pm_file_samriddhi')
+        
+        st.markdown("---")
+        
+        # Clear cache button
+        if st.button("🗑️ Clear Cache", use_container_width=True, key='samriddhi_clear'):
+            st.session_state.samriddhi_data = None
+            st.session_state.samriddhi_results = {}
+            st.session_state.processed_data = None
+            st.session_state.all_results = {}
+            st.session_state.manager_data = None
+            st.session_state.manager_results = {}
+            st.rerun()
+            
+        if st.button("🔄 Process Samriddhi Data", use_container_width=True, key='samriddhi_process'):
+            if samriddhi_file and pm_file_samriddhi:
+                with st.spinner("Processing Samriddhi data..."):
+                    try:
+                        # Read Samriddhi CSV
+                        sam_df = pd.read_csv(samriddhi_file)
+                        
+                        # Read PM Excel
+                        pm_df = pd.read_excel(pm_file_samriddhi)
+                        
+                        # Normalize ASIN columns
+                        pm_asin_col = None
+                        sam_asin_col = None
+                        
+                        for col in pm_df.columns:
+                            if col.lower() == 'asin':
+                                pm_asin_col = col
+                                break
+                        
+                        for col in sam_df.columns:
+                            if col.lower() == 'asin':
+                                sam_asin_col = col
+                                break
+                                
+                        if pm_asin_col:
+                            pm_df[pm_asin_col] = pm_df[pm_asin_col].astype(str).str.strip().str.upper()
+                        
+                        if sam_asin_col:
+                            sam_df[sam_asin_col] = sam_df[sam_asin_col].astype(str).str.strip().str.upper()
+                            
+                            # Create mappings
+                            sku_name_map = dict(zip(pm_df[pm_asin_col], pm_df["Amazon Sku Name"])) if "Amazon Sku Name" in pm_df.columns else {}
+                            brand_map = dict(zip(pm_df[pm_asin_col], pm_df["Brand"])) if "Brand" in pm_df.columns else {}
+                            bm_map = dict(zip(pm_df[pm_asin_col], pm_df["Brand Manager"])) if "Brand Manager" in pm_df.columns else {}
+                            v_sku_map = dict(zip(pm_df[pm_asin_col], pm_df["Vendor SKU Codes"])) if "Vendor SKU Codes" in pm_df.columns else {}
+                            p_name_map = dict(zip(pm_df[pm_asin_col], pm_df["Product Name"])) if "Product Name" in pm_df.columns else {}
+                            
+                            # Map columns
+                            sam_df["Amazon Sku Name"] = sam_df[sam_asin_col].map(sku_name_map)
+                            sam_df["Vendor Sku Codes"] = sam_df[sam_asin_col].map(v_sku_map)
+                            sam_df["Brand"] = sam_df[sam_asin_col].map(brand_map)
+                            sam_df["Brand Manager"] = sam_df[sam_asin_col].map(bm_map)
+                            sam_df["Product Name"] = sam_df[sam_asin_col].map(p_name_map)
+                            
+                            # Reorder columns to place new columns after ASIN
+                            cols = list(sam_df.columns)
+                            new_cols = ["Amazon Sku Name", "Vendor Sku Codes", "Brand", "Brand Manager", "Product Name"]
+                            
+                            # Remove new_cols from original list to avoid duplication
+                            for c in new_cols:
+                                if c in cols:
+                                    cols.remove(c)
+                            
+                            # Find ASIN position
+                            asin_idx = -1
+                            if sam_asin_col in cols:
+                                asin_idx = cols.index(sam_asin_col)
+                            
+                            if asin_idx != -1:
+                                # Insert new columns after ASIN
+                                final_cols = cols[:asin_idx+1] + new_cols + cols[asin_idx+1:]
+                                # Filter to existing columns only in case any map failed
+                                final_cols = [c for c in final_cols if c in sam_df.columns]
+                                sam_df = sam_df[final_cols]
+                        else:
+                            st.warning(f"⚠️ ASIN column not found in Samriddhi file. Found columns: {list(sam_df.columns)}")
+
+                        # Convert columns to string/numeric as appropriate and handle ris_week specifically
+                        ris_week_cols = [c for c in sam_df.columns if c.lower().startswith("ris_week")]
+                        
+                        for col in sam_df.columns:
+                            if col in ris_week_cols:
+                                # For ris_week columns, fill NaNs with 0 and convert to percentage
+                                sam_df[col] = pd.to_numeric(sam_df[col], errors='coerce').fillna(0)
+                                sam_df[col] = (sam_df[col] * 100).round(2)
+                            elif sam_df[col].dtype == 'object':
+                                sam_df[col] = sam_df[col].astype(str)
+                            else:
+                                # For other numeric columns, just ensure numeric type
+                                sam_df[col] = pd.to_numeric(sam_df[col], errors='coerce')
+                        
+                        # Store processed data
+                        st.session_state.samriddhi_data = sam_df
+                        
+                        # Generate pivots
+                        sam_results = {}
+                        
+                        # Total Units columns (case-insensitive find)
+                        total_cw_col = None
+                        total_l30d_col = None
+                        cluster_col = None
+                        
+                        for col in sam_df.columns:
+                            col_lower = col.lower().replace("_", "").replace(" ", "")
+                            if col_lower == 'totalunitscw':
+                                total_cw_col = col
+                            if col_lower == 'totalunitsl30d':
+                                total_l30d_col = col
+                            if col_lower in ['custcluster', 'cluster']:
+                                cluster_col = col
+
+                        # 1. Brand-wise Pivot
+                        if "Brand" in sam_df.columns and total_cw_col and total_l30d_col:
+                            # Sum logic
+                            sam_df[total_cw_col] = pd.to_numeric(sam_df[total_cw_col], errors='coerce').fillna(0)
+                            sam_df[total_l30d_col] = pd.to_numeric(sam_df[total_l30d_col], errors='coerce').fillna(0)
+                            
+                            brand_pivot = sam_df.groupby("Brand").agg({
+                                total_cw_col: 'sum',
+                                total_l30d_col: 'sum'
+                            }).reset_index()
+                            # Add Grand Total
+                            grand_total = pd.DataFrame({
+                                "Brand": ["Grand Total"],
+                                total_cw_col: [brand_pivot[total_cw_col].sum()],
+                                total_l30d_col: [brand_pivot[total_l30d_col].sum()]
+                            })
+                            brand_pivot = pd.concat([brand_pivot, grand_total], ignore_index=True)
+                            sam_results['brand_wise'] = brand_pivot
+                            
+                        # 2. Cluster-wise Pivot
+                        if cluster_col and total_cw_col and total_l30d_col:
+                            cluster_pivot = sam_df.groupby(cluster_col).agg({
+                                total_cw_col: 'sum',
+                                total_l30d_col: 'sum'
+                            }).reset_index()
+                            # Add Grand Total
+                            grand_total = pd.DataFrame({
+                                cluster_col: ["Grand Total"],
+                                total_cw_col: [cluster_pivot[total_cw_col].sum()],
+                                total_l30d_col: [cluster_pivot[total_l30d_col].sum()]
+                            })
+                            cluster_pivot = pd.concat([cluster_pivot, grand_total], ignore_index=True)
+                            sam_results['cluster_wise'] = cluster_pivot
+                            
+                        # 3. ASIN-wise Pivot
+                        if sam_asin_col and total_cw_col and total_l30d_col:
+                            asin_pivot = sam_df.groupby(sam_asin_col).agg({
+                                total_cw_col: 'sum',
+                                total_l30d_col: 'sum'
+                            }).reset_index()
+                            # Add Grand Total
+                            grand_total = pd.DataFrame({
+                                sam_asin_col: ["Grand Total"],
+                                total_cw_col: [asin_pivot[total_cw_col].sum()],
+                                total_l30d_col: [asin_pivot[total_l30d_col].sum()]
+                            })
+                            asin_pivot = pd.concat([asin_pivot, grand_total], ignore_index=True)
+                            sam_results['asin_wise'] = asin_pivot
+
+                        st.session_state.samriddhi_results = sam_results
+                        st.success("✅ Samriddhi data processed successfully!")
+                    except Exception as e:
+                        st.error(f"❌ Error processing files: {str(e)}")
+            else:
+                st.warning("⚠️ Please upload both Samriddhi and PM files!")
+
 # Main content area
 if st.session_state.processed_data is not None:
     tabs = st.tabs([
@@ -844,6 +1024,152 @@ elif st.session_state.manager_data is not None:
         else:
             st.warning("⚠️ Cluster-ASIN pivot not available. Ensure both cust_cluster and ASIN columns exist.")
 
+elif st.session_state.samriddhi_data is not None:
+    # Samriddhi Data Display with Tabs
+    sam_tabs = st.tabs([
+        "📋 Processed Data",
+        "📊 Deep Dive Pivot",
+        "🏷️ Brand-wise",
+        "🏢 Cluster-wise",
+        "🔖 ASIN-wise"
+    ])
+    
+    # Tab 1: Processed Data
+    with sam_tabs[0]:
+        st.header("📊 RIS Samriddhi Data")
+        df = st.session_state.samriddhi_data
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Records", f"{len(df):,}")
+        with col2:
+            # Find total_units_cw column
+            total_cw_col = None
+            for col in df.columns:
+                if col.lower().replace("_", "").replace(" ", "") == 'totalunitscw':
+                    total_cw_col = col
+                    break
+            if total_cw_col:
+                total_units = pd.to_numeric(df[total_cw_col], errors='coerce').sum()
+                st.metric("Total Units (CW)", f"{total_units:,.0f}")
+        with col3:
+            # Find total_units_l30d column
+            total_l30_col = None
+            for col in df.columns:
+                if col.lower().replace("_", "").replace(" ", "") == 'totalunitsl30d':
+                    total_l30_col = col
+                    break
+            if total_l30_col:
+                total_l30 = pd.to_numeric(df[total_l30_col], errors='coerce').sum()
+                st.metric("Total Units (L30D)", f"{total_l30:,.0f}")
+        
+        st.markdown("---")
+        st.dataframe(df, use_container_width=True, height=500)
+        
+        st.download_button(
+            label="📥 Download Samriddhi Data (Excel)",
+            data=to_excel(df),
+            file_name="samriddhi_ris_data.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    
+    # Tab 2: Deep Dive Pivot
+    with sam_tabs[1]:
+        st.header("📊 Deep Dive Pivot Analysis")
+        df = st.session_state.samriddhi_data
+        
+        # 1. Cluster Filter
+        cluster_col = None
+        for col in df.columns:
+            if col.lower().replace("_", "").replace(" ", "") in ['custcluster', 'cluster']:
+                cluster_col = col
+                break
+        
+        if cluster_col:
+            selected_clusters = st.multiselect(
+                "Filter by Cluster",
+                options=sorted(df[cluster_col].unique()),
+                default=[]
+            )
+            
+            # Filter Data
+            if selected_clusters:
+                filtered_df = df[df[cluster_col].isin(selected_clusters)]
+            else:
+                filtered_df = df
+        else:
+            filtered_df = df
+            st.warning("⚠️ Cluster column not found for filtering.")
+
+        # 2. Pivot Table
+        ris_week_cols = [c for c in filtered_df.columns if c.lower().startswith("ris_week")]
+        asin_col = None
+        for col in filtered_df.columns:
+            if col.lower() == 'asin':
+                asin_col = col
+                break
+        
+        if asin_col and ris_week_cols:
+            pivot_df = filtered_df.groupby([asin_col, "Brand"]).agg({
+                col: 'sum' for col in ris_week_cols
+            }).reset_index()
+            
+            st.dataframe(pivot_df, use_container_width=True, height=500)
+            
+            st.download_button(
+                label="📥 Download Deep Dive Pivot (Excel)",
+                data=to_excel(pivot_df),
+                file_name="deep_dive_pivot.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ ASIN or Weekly RIS columns not found for pivoting.")
+
+    # Tab 3: Brand-wise Pivot
+    with sam_tabs[2]:
+        st.header("🏷️ Brand-wise Analysis")
+        if 'brand_wise' in st.session_state.samriddhi_results:
+            df = st.session_state.samriddhi_results['brand_wise']
+            st.dataframe(df, use_container_width=True, height=400)
+            st.download_button(
+                label="📥 Download Brand-wise Analysis (Excel)",
+                data=to_excel(df),
+                file_name="samriddhi_brand_wise.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ Brand-wise pivot not available.")
+            
+    # Tab 3: Cluster-wise Pivot
+    with sam_tabs[2]:
+        st.header("🏢 Cluster-wise Analysis")
+        if 'cluster_wise' in st.session_state.samriddhi_results:
+            df = st.session_state.samriddhi_results['cluster_wise']
+            st.dataframe(df, use_container_width=True, height=400)
+            st.download_button(
+                label="📥 Download Cluster-wise Analysis (Excel)",
+                data=to_excel(df),
+                file_name="samriddhi_cluster_wise.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ Cluster-wise pivot not available.")
+            
+    # Tab 4: ASIN-wise Pivot
+    with sam_tabs[3]:
+        st.header("🔖 ASIN-wise Analysis")
+        if 'asin_wise' in st.session_state.samriddhi_results:
+            df = st.session_state.samriddhi_results['asin_wise']
+            st.dataframe(df, use_container_width=True, height=400)
+            st.download_button(
+                label="📥 Download ASIN-wise Analysis (Excel)",
+                data=to_excel(df),
+                file_name="samriddhi_asin_wise.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        else:
+            st.warning("⚠️ ASIN-wise pivot not available.")
+
 else:
     # Welcome screen
     st.info("👋 Welcome! Please upload the required files using the sidebar to begin analysis.")
@@ -890,6 +1216,11 @@ else:
     **Manager:**
     - RIS Week Data with Non RIS calculations
     - Brand, Brand Manager, Vendor SKU mappings from PM file
+    
+    **RIS Samriddhi:**
+    - Deep Dive ASIN level analysis
+    - Support for custom Samriddhi CSV format
+    - Mapping with Purchase Master for brand insights
     
     All reports can be downloaded as Excel files! 📥
 
