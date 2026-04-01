@@ -686,12 +686,14 @@ with st.sidebar:
             if samriddhi_file and pm_file_samriddhi:
                 with st.spinner("Processing Samriddhi data..."):
                     try:
-                        # Read Samriddhi CSV
+                        # Read Samriddhi CSV and drop fully empty rows
                         sam_df = pd.read_csv(samriddhi_file, encoding='utf-8-sig')
+                        sam_df = sam_df.dropna(how='all').reset_index(drop=True)
                         sam_df.columns = sam_df.columns.str.strip()
                         
-                        # Read PM Excel
+                        # Read PM Excel and drop fully empty rows
                         pm_df = pd.read_excel(pm_file_samriddhi)
+                        pm_df = pm_df.dropna(how='all').reset_index(drop=True)
                         pm_df.columns = pm_df.columns.str.strip()
                         
                         # Normalize ASIN columns with robust detection
@@ -699,9 +701,12 @@ with st.sidebar:
                         sam_asin_col = find_column(sam_df, ['asin', 'amazonasin', 'itemasin'])
                         
                         if pm_asin_col and sam_asin_col:
-                            # Standardize keys: upper, string, strip
-                            pm_df[pm_asin_col] = pm_df[pm_asin_col].astype(str).str.strip().str.upper()
-                            sam_df[sam_asin_col] = sam_df[sam_asin_col].astype(str).str.strip().str.upper()
+                            # Standardize keys: upper, string, strip, handle NaNs
+                            pm_df[pm_asin_col] = pm_df[pm_asin_col].fillna('').astype(str).str.strip().str.upper()
+                            sam_df[sam_asin_col] = sam_df[sam_asin_col].fillna('').astype(str).str.strip().str.upper()
+                            
+                            # Filter out rows where ASIN is empty
+                            sam_df = sam_df[sam_df[sam_asin_col] != ''].reset_index(drop=True)
                             
                             # Find required columns in PM file robustly
                             pm_sku_col = find_column(pm_df, ['amazonskuname', 'sku', 'merchantsku'])
@@ -717,12 +722,17 @@ with st.sidebar:
                             v_sku_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_vsku_col])) if pm_vsku_col else {}
                             p_name_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_pname_col])) if pm_pname_col else {}
                             
-                            # Map columns to Samriddhi DataFrame
-                            sam_df["Amazon Sku Name"] = sam_df[sam_asin_col].map(sku_map)
-                            sam_df["Vendor Sku Codes"] = sam_df[sam_asin_col].map(v_sku_map)
-                            sam_df["Brand"] = sam_df[sam_asin_col].map(brand_map)
-                            sam_df["Brand Manager"] = sam_df[sam_asin_col].map(bm_map)
-                            sam_df["Product Name"] = sam_df[sam_asin_col].map(p_name_map)
+                            # Map columns to Samriddhi DataFrame and fill failures with empty string
+                            sam_df["Amazon Sku Name"] = sam_df[sam_asin_col].map(sku_map).fillna('')
+                            sam_df["Vendor Sku Codes"] = sam_df[sam_asin_col].map(v_sku_map).fillna('')
+                            sam_df["Brand"] = sam_df[sam_asin_col].map(brand_map).fillna('')
+                            sam_df["Brand Manager"] = sam_df[sam_asin_col].map(bm_map).fillna('')
+                            sam_df["Product Name"] = sam_df[sam_asin_col].map(p_name_map).fillna('')
+                            
+                            # Standardize key column name to ASIN
+                            if sam_asin_col != "ASIN":
+                                sam_df = sam_df.rename(columns={sam_asin_col: "ASIN"})
+                                sam_asin_col = "ASIN"
                             
                             # Show warnings for missing PM columns
                             missing_pm = []
