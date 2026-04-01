@@ -69,17 +69,60 @@ def find_column(df, patterns):
     Finds a column in a dataframe based on a list of possible name patterns (lowercase, no spaces).
     Returns the actual column name or None if not found.
     """
-    if df is None:
+    if df is None or df.empty:
         return None
     
     # Normalize patterns for matching
-    norm_patterns = [p.lower().replace("_", "").replace(" ", "").replace("-", "") for p in patterns]
+    norm_patterns = [str(p).lower().translate(str.maketrans('', '', ' _-')) for p in patterns]
     
     for col in df.columns:
-        col_norm = str(col).lower().replace("_", "").replace(" ", "").replace("-", "")
-        if col_norm in norm_patterns:
-            return col
+        # Clean header: lowercase, remove non-alphanumeric, remove common delimiters
+        col_norm = str(col).lower().translate(str.maketrans('', '', ' _-'))
+        # Remove common invisible characters like BOM
+        col_norm = "".join(c for c in col_norm if c.isalnum())
+        
+        for p in norm_patterns:
+            if p in col_norm or col_norm in p:
+                return col
     return None
+
+def sanitize_dataframe(df):
+    """
+    Prepares a dataframe for Streamlit display by converting Object types to strings
+    and handling NaNs to avoid serialization errors.
+    """
+    if df is None or df.empty:
+        return df
+    df_copy = df.copy()
+    for col in df_copy.columns:
+        if df_copy[col].dtype == 'object':
+            # Convert to string and handle actual NaNs/Nones to show as empty
+            df_copy[col] = df_copy[col].fillna('').astype(str).str.strip()
+            # Replace literal strings like 'nan' or 'None' with empty string
+            df_copy[col] = df_copy[col].replace(['nan', 'None', 'NaN', 'null'], '')
+    return df_copy
+
+def load_csv_safely(file):
+    """
+    Tries multiple encodings and separators to read a CSV file safely.
+    """
+    try:
+        import io
+        file.seek(0)
+        # Try UTF-8 with BOM handling first
+        df = pd.read_csv(file, encoding='utf-8-sig')
+        if len(df.columns) <= 1:
+            file.seek(0)
+            df = pd.read_csv(file, sep=';', encoding='utf-8-sig')
+        return df
+    except:
+        try:
+            file.seek(0)
+            df = pd.read_csv(file, encoding='latin1')
+            return df
+        except:
+            file.seek(0)
+            return pd.read_csv(file)
 
 def to_excel(df):
     output = BytesIO()
@@ -686,103 +729,90 @@ with st.sidebar:
             if samriddhi_file and pm_file_samriddhi:
                 with st.spinner("Processing Samriddhi data..."):
                     try:
-                        # Read Samriddhi CSV and drop fully empty rows
-                        sam_df = pd.read_csv(samriddhi_file, encoding='utf-8-sig')
-                        sam_df = sam_df.dropna(how='all').reset_index(drop=True)
-                        sam_df.columns = sam_df.columns.str.strip()
-                        
-                        # Read PM Excel and drop fully empty rows
+                        # 1. Read files robustly
+                        sam_df = load_csv_safely(samriddhi_file)
                         pm_df = pd.read_excel(pm_file_samriddhi)
-                        pm_df = pm_df.dropna(how='all').reset_index(drop=True)
-                        pm_df.columns = pm_df.columns.str.strip()
                         
-                        # Normalize ASIN columns with robust detection
+                        # Remove empty rows immediately
+                        sam_df = sam_df.dropna(how='all').reset_index(drop=True)
+                        pm_df = pm_df.dropna(how='all').reset_index(drop=True)
+                        
+                        # Clean column headers
+                        sam_df.columns = [str(c).strip() for c in sam_df.columns]
+                        pm_df.columns = [str(c).strip() for c in pm_df.columns]
+                        
+                        # 2. Find and Standardize ASIN (Key Bridge)
                         pm_asin_col = find_column(pm_df, ['asin', 'amazonasin', 'itemasin'])
                         sam_asin_col = find_column(sam_df, ['asin', 'amazonasin', 'itemasin'])
                         
                         if pm_asin_col and sam_asin_col:
-                            # Standardize keys: upper, string, strip, handle NaNs
-                            pm_df[pm_asin_col] = pm_df[pm_asin_col].fillna('').astype(str).str.strip().str.upper()
-                            sam_df[sam_asin_col] = sam_df[sam_asin_col].fillna('').astype(str).str.strip().str.upper()
+                            # Standardize mapping key names in the DF to avoid confusion
+                            # Create a clean BRIDGE key in both
+                            sam_df["_ASIN_BRIDGE"] = sam_df[sam_asin_col].fillna('').astype(str).str.strip().str.upper()
+                            pm_df["_ASIN_BRIDGE"] = pm_df[pm_asin_col].fillna('').astype(str).str.strip().str.upper()
                             
-                            # Filter out rows where ASIN is empty
-                            sam_df = sam_df[sam_df[sam_asin_col] != ''].reset_index(drop=True)
+                            # Standardize displayed ASIN column
+                            if "ASIN" not in sam_df.columns:
+                                sam_df["ASIN"] = sam_df[sam_asin_col]
                             
-                            # Find required columns in PM file robustly
+                            # 3. Extract and Clean Mappings from PM
                             pm_sku_col = find_column(pm_df, ['amazonskuname', 'sku', 'merchantsku'])
                             pm_brand_col = find_column(pm_df, ['brand', 'brandname', 'merchantbrand'])
                             pm_manager_col = find_column(pm_df, ['brandmanager', 'manager', 'bm'])
                             pm_vsku_col = find_column(pm_df, ['vendorskucodes', 'vendorsku', 'vsku'])
                             pm_pname_col = find_column(pm_df, ['productname', 'title', 'itemname', 'product'])
                             
-                            # Create mappings (only if columns exist)
-                            sku_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_sku_col])) if pm_sku_col else {}
-                            brand_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_brand_col])) if pm_brand_col else {}
-                            bm_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_manager_col])) if pm_manager_col else {}
-                            v_sku_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_vsku_col])) if pm_vsku_col else {}
-                            p_name_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_pname_col])) if pm_pname_col else {}
+                            # Integrate Mapped Data
+                            mapping_targets = {
+                                "Amazon Sku Name": pm_sku_col,
+                                "Vendor Sku Codes": pm_vsku_col,
+                                "Brand": pm_brand_col,
+                                "Brand Manager": pm_manager_col,
+                                "Product Name": pm_pname_col
+                            }
                             
-                            # Map columns to Samriddhi DataFrame and fill failures with empty string
-                            sam_df["Amazon Sku Name"] = sam_df[sam_asin_col].map(sku_map).fillna('')
-                            sam_df["Vendor Sku Codes"] = sam_df[sam_asin_col].map(v_sku_map).fillna('')
-                            sam_df["Brand"] = sam_df[sam_asin_col].map(brand_map).fillna('')
-                            sam_df["Brand Manager"] = sam_df[sam_asin_col].map(bm_map).fillna('')
-                            sam_df["Product Name"] = sam_df[sam_asin_col].map(p_name_map).fillna('')
+                            for col_name, pm_col in mapping_targets.items():
+                                if pm_col:
+                                    # Create dictionary map
+                                    m_dict = pm_df.set_index("_ASIN_BRIDGE")[pm_col].to_dict()
+                                    # Map to Samriddhi
+                                    sam_df[col_name] = sam_df["_ASIN_BRIDGE"].map(m_dict).fillna('')
                             
-                            # Standardize key column name to ASIN
-                            if sam_asin_col != "ASIN":
-                                sam_df = sam_df.rename(columns={sam_asin_col: "ASIN"})
-                                sam_asin_col = "ASIN"
+                            # Clean up bridge columns
+                            sam_df = sam_df.drop(columns=["_ASIN_BRIDGE"])
                             
-                            # Show warnings for missing PM columns
-                            missing_pm = []
-                            if not pm_sku_col: missing_pm.append("SKU")
-                            if not pm_brand_col: missing_pm.append("Brand")
-                            if not pm_manager_col: missing_pm.append("Brand Manager")
-                            if not pm_vsku_col: missing_pm.append("Vendor SKU")
-                            if not pm_pname_col: missing_pm.append("Product Name")
-                            if missing_pm:
-                                st.warning(f"⚠️ PM file is missing columns for: {', '.join(missing_pm)}")
+                            # 4. Reorder Columns: Move ASIN, Brand, etc. to front
+                            important_cols = ["ASIN", "Amazon Sku Name", "Vendor Sku Codes", "Brand", "Brand Manager", "Product Name"]
+                            # Only use columns that exist
+                            important_cols = [c for c in important_cols if c in sam_df.columns]
+                            
+                            other_cols = [c for c in sam_df.columns if c not in important_cols]
+                            sam_df = sam_df[important_cols + other_cols]
 
-                            # Reorder columns to place new columns after ASIN
-                            cols = list(sam_df.columns)
-                            new_cols = ["Amazon Sku Name", "Vendor Sku Codes", "Brand", "Brand Manager", "Product Name"]
-                            for c in new_cols:
-                                if c in cols: cols.remove(c)
-                            
-                            asin_idx = cols.index(sam_asin_col) if sam_asin_col in cols else -1
-                            if asin_idx != -1:
-                                final_cols = cols[:asin_idx+1] + new_cols + cols[asin_idx+1:]
-                                # Ensure only existing columns are used
-                                final_cols = [c for c in final_cols if c in sam_df.columns]
-                                sam_df = sam_df[final_cols]
                         else:
-                            if not sam_asin_col:
-                                st.error(f"❌ ASIN column not found in Samriddhi file. Columns: {list(sam_df.columns)}")
-                            if not pm_asin_col:
-                                st.error(f"❌ ASIN column not found in PM file. Columns: {list(pm_df.columns)}")
-
-                        # Convert columns to string/numeric as appropriate and handle ris_week specifically
-                        ris_week_cols = [c for c in sam_df.columns if c.lower().startswith("ris_week")]
+                            if not sam_asin_col: st.error("❌ ASIN column not found in Samriddhi file.")
+                            if not pm_asin_col: st.error("❌ ASIN column not found in PM file.")
                         
+                        # 5. Type Conversions for Week Data and Metrics
                         for col in sam_df.columns:
-                            if col in ris_week_cols:
-                                # For ris_week columns, fill NaNs with 0 and convert to percentage
+                            if str(col).lower().startswith("ris_week"):
                                 sam_df[col] = pd.to_numeric(sam_df[col], errors='coerce').fillna(0)
                                 sam_df[col] = (sam_df[col] * 100).round(2)
-                            elif sam_df[col].dtype == 'object':
-                                sam_df[col] = sam_df[col].astype(str)
-                            else:
-                                # For other numeric columns, just ensure numeric type
-                                sam_df[col] = pd.to_numeric(sam_df[col], errors='coerce')
+                            elif col not in ["ASIN", "Amazon Sku Name", "Vendor Sku Codes", "Brand", "Brand Manager", "Product Name"]:
+                                # Try to numeric other columns (like total_units)
+                                temp = pd.to_numeric(sam_df[col], errors='coerce')
+                                if not temp.isna().all():
+                                    sam_df[col] = temp
                         
-                        # Store processed data
+                        # Final pass on all objects to ensure they are clean strings
+                        for col in sam_df.columns:
+                            if sam_df[col].dtype == 'object':
+                                sam_df[col] = sam_df[col].fillna('').astype(str).str.strip()
+
                         st.session_state.samriddhi_data = sam_df
                         
-                        # Generate pivots
+                        # 6. Generate pivots
                         sam_results = {}
-                        
-                        # Total Units columns (robust find)
                         total_cw_col = find_column(sam_df, ['totalunitscw', 'cwtotal', 'unitscw'])
                         total_l30d_col = find_column(sam_df, ['totalunitsl30d', 'l30dtotal', 'unitsl30d'])
                         cluster_col = find_column(sam_df, ['custcluster', 'cluster', 'customercluster'])
@@ -1098,7 +1128,7 @@ elif st.session_state.samriddhi_data is not None:
                 st.metric("Total Units (L30D)", f"{total_l30:,.0f}")
         
         st.markdown("---")
-        st.dataframe(df, use_container_width=True, height=500)
+        st.dataframe(sanitize_dataframe(df), use_container_width=True, height=500)
         
         st.download_button(
             label="📥 Download Samriddhi Data (Excel)",
@@ -1144,7 +1174,7 @@ elif st.session_state.samriddhi_data is not None:
                 col: 'sum' for col in ris_week_cols
             }).reset_index()
             
-            st.dataframe(pivot_df, use_container_width=True, height=500)
+            st.dataframe(sanitize_dataframe(pivot_df), use_container_width=True, height=500)
             
             st.download_button(
                 label="📥 Download Deep Dive Pivot (Excel)",
@@ -1160,7 +1190,7 @@ elif st.session_state.samriddhi_data is not None:
         st.header("🏷️ Brand-wise Analysis")
         if 'brand_wise' in st.session_state.samriddhi_results:
             df = st.session_state.samriddhi_results['brand_wise']
-            st.dataframe(df, use_container_width=True, height=400)
+            st.dataframe(sanitize_dataframe(df), use_container_width=True, height=400)
             st.download_button(
                 label="📥 Download Brand-wise Analysis (Excel)",
                 data=to_excel(df),
@@ -1175,7 +1205,7 @@ elif st.session_state.samriddhi_data is not None:
         st.header("🏢 Cluster-wise Analysis")
         if 'cluster_wise' in st.session_state.samriddhi_results:
             df = st.session_state.samriddhi_results['cluster_wise']
-            st.dataframe(df, use_container_width=True, height=400)
+            st.dataframe(sanitize_dataframe(df), use_container_width=True, height=400)
             st.download_button(
                 label="📥 Download Cluster-wise Analysis (Excel)",
                 data=to_excel(df),
@@ -1190,7 +1220,7 @@ elif st.session_state.samriddhi_data is not None:
         st.header("🔖 ASIN-wise Analysis")
         if 'asin_wise' in st.session_state.samriddhi_results:
             df = st.session_state.samriddhi_results['asin_wise']
-            st.dataframe(df, use_container_width=True, height=400)
+            st.dataframe(sanitize_dataframe(df), use_container_width=True, height=400)
             st.download_button(
                 label="📥 Download ASIN-wise Analysis (Excel)",
                 data=to_excel(df),
