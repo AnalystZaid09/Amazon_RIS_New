@@ -64,6 +64,23 @@ def normalize_shipping_state(shipping_state, fc_state, state_rules):
     
     return shipping_state
 
+def find_column(df, patterns):
+    """
+    Finds a column in a dataframe based on a list of possible name patterns (lowercase, no spaces).
+    Returns the actual column name or None if not found.
+    """
+    if df is None:
+        return None
+    
+    # Normalize patterns for matching
+    norm_patterns = [p.lower().replace("_", "").replace(" ", "").replace("-", "") for p in patterns]
+    
+    for col in df.columns:
+        col_norm = str(col).lower().replace("_", "").replace(" ", "").replace("-", "")
+        if col_norm in norm_patterns:
+            return col
+    return None
+
 def to_excel(df):
     output = BytesIO()
     # Convert object columns to string to avoid PyArrow type conversion errors
@@ -677,62 +694,63 @@ with st.sidebar:
                         pm_df = pd.read_excel(pm_file_samriddhi)
                         pm_df.columns = pm_df.columns.str.strip()
                         
-                        # Normalize ASIN columns
-                        pm_asin_col = None
-                        sam_asin_col = None
+                        # Normalize ASIN columns with robust detection
+                        pm_asin_col = find_column(pm_df, ['asin', 'amazonasin', 'itemasin'])
+                        sam_asin_col = find_column(sam_df, ['asin', 'amazonasin', 'itemasin'])
                         
-                        for col in pm_df.columns:
-                            if col.lower() == 'asin':
-                                pm_asin_col = col
-                                break
-                        
-                        for col in sam_df.columns:
-                            if col.lower() == 'asin':
-                                sam_asin_col = col
-                                break
-                                
-                        if pm_asin_col:
+                        if pm_asin_col and sam_asin_col:
+                            # Standardize keys: upper, string, strip
                             pm_df[pm_asin_col] = pm_df[pm_asin_col].astype(str).str.strip().str.upper()
-                        
-                        if sam_asin_col:
                             sam_df[sam_asin_col] = sam_df[sam_asin_col].astype(str).str.strip().str.upper()
                             
-                            # Create mappings
-                            sku_name_map = dict(zip(pm_df[pm_asin_col], pm_df["Amazon Sku Name"])) if "Amazon Sku Name" in pm_df.columns else {}
-                            brand_map = dict(zip(pm_df[pm_asin_col], pm_df["Brand"])) if "Brand" in pm_df.columns else {}
-                            bm_map = dict(zip(pm_df[pm_asin_col], pm_df["Brand Manager"])) if "Brand Manager" in pm_df.columns else {}
-                            v_sku_map = dict(zip(pm_df[pm_asin_col], pm_df["Vendor SKU Codes"])) if "Vendor SKU Codes" in pm_df.columns else {}
-                            p_name_map = dict(zip(pm_df[pm_asin_col], pm_df["Product Name"])) if "Product Name" in pm_df.columns else {}
+                            # Find required columns in PM file robustly
+                            pm_sku_col = find_column(pm_df, ['amazonskuname', 'sku', 'merchantsku'])
+                            pm_brand_col = find_column(pm_df, ['brand', 'brandname', 'merchantbrand'])
+                            pm_manager_col = find_column(pm_df, ['brandmanager', 'manager', 'bm'])
+                            pm_vsku_col = find_column(pm_df, ['vendorskucodes', 'vendorsku', 'vsku'])
+                            pm_pname_col = find_column(pm_df, ['productname', 'title', 'itemname', 'product'])
                             
-                            # Map columns
-                            sam_df["Amazon Sku Name"] = sam_df[sam_asin_col].map(sku_name_map)
+                            # Create mappings (only if columns exist)
+                            sku_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_sku_col])) if pm_sku_col else {}
+                            brand_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_brand_col])) if pm_brand_col else {}
+                            bm_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_manager_col])) if pm_manager_col else {}
+                            v_sku_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_vsku_col])) if pm_vsku_col else {}
+                            p_name_map = dict(zip(pm_df[pm_asin_col], pm_df[pm_pname_col])) if pm_pname_col else {}
+                            
+                            # Map columns to Samriddhi DataFrame
+                            sam_df["Amazon Sku Name"] = sam_df[sam_asin_col].map(sku_map)
                             sam_df["Vendor Sku Codes"] = sam_df[sam_asin_col].map(v_sku_map)
                             sam_df["Brand"] = sam_df[sam_asin_col].map(brand_map)
                             sam_df["Brand Manager"] = sam_df[sam_asin_col].map(bm_map)
                             sam_df["Product Name"] = sam_df[sam_asin_col].map(p_name_map)
                             
+                            # Show warnings for missing PM columns
+                            missing_pm = []
+                            if not pm_sku_col: missing_pm.append("SKU")
+                            if not pm_brand_col: missing_pm.append("Brand")
+                            if not pm_manager_col: missing_pm.append("Brand Manager")
+                            if not pm_vsku_col: missing_pm.append("Vendor SKU")
+                            if not pm_pname_col: missing_pm.append("Product Name")
+                            if missing_pm:
+                                st.warning(f"⚠️ PM file is missing columns for: {', '.join(missing_pm)}")
+
                             # Reorder columns to place new columns after ASIN
                             cols = list(sam_df.columns)
                             new_cols = ["Amazon Sku Name", "Vendor Sku Codes", "Brand", "Brand Manager", "Product Name"]
-                            
-                            # Remove new_cols from original list to avoid duplication
                             for c in new_cols:
-                                if c in cols:
-                                    cols.remove(c)
+                                if c in cols: cols.remove(c)
                             
-                            # Find ASIN position
-                            asin_idx = -1
-                            if sam_asin_col in cols:
-                                asin_idx = cols.index(sam_asin_col)
-                            
+                            asin_idx = cols.index(sam_asin_col) if sam_asin_col in cols else -1
                             if asin_idx != -1:
-                                # Insert new columns after ASIN
                                 final_cols = cols[:asin_idx+1] + new_cols + cols[asin_idx+1:]
-                                # Filter to existing columns only in case any map failed
+                                # Ensure only existing columns are used
                                 final_cols = [c for c in final_cols if c in sam_df.columns]
                                 sam_df = sam_df[final_cols]
                         else:
-                            st.warning(f"⚠️ ASIN column not found in Samriddhi file. Found columns: {list(sam_df.columns)}")
+                            if not sam_asin_col:
+                                st.error(f"❌ ASIN column not found in Samriddhi file. Columns: {list(sam_df.columns)}")
+                            if not pm_asin_col:
+                                st.error(f"❌ ASIN column not found in PM file. Columns: {list(pm_df.columns)}")
 
                         # Convert columns to string/numeric as appropriate and handle ris_week specifically
                         ris_week_cols = [c for c in sam_df.columns if c.lower().startswith("ris_week")]
@@ -754,19 +772,10 @@ with st.sidebar:
                         # Generate pivots
                         sam_results = {}
                         
-                        # Total Units columns (case-insensitive find)
-                        total_cw_col = None
-                        total_l30d_col = None
-                        cluster_col = None
-                        
-                        for col in sam_df.columns:
-                            col_lower = col.lower().replace("_", "").replace(" ", "")
-                            if col_lower == 'totalunitscw':
-                                total_cw_col = col
-                            if col_lower == 'totalunitsl30d':
-                                total_l30d_col = col
-                            if col_lower in ['custcluster', 'cluster']:
-                                cluster_col = col
+                        # Total Units columns (robust find)
+                        total_cw_col = find_column(sam_df, ['totalunitscw', 'cwtotal', 'unitscw'])
+                        total_l30d_col = find_column(sam_df, ['totalunitsl30d', 'l30dtotal', 'unitsl30d'])
+                        cluster_col = find_column(sam_df, ['custcluster', 'cluster', 'customercluster'])
 
                         # 1. Brand-wise Pivot
                         if "Brand" in sam_df.columns and total_cw_col and total_l30d_col:
@@ -1067,21 +1076,13 @@ elif st.session_state.samriddhi_data is not None:
             st.metric("Total Records", f"{len(df):,}")
         with col2:
             # Find total_units_cw column
-            total_cw_col = None
-            for col in df.columns:
-                if col.lower().replace("_", "").replace(" ", "") == 'totalunitscw':
-                    total_cw_col = col
-                    break
+            total_cw_col = find_column(df, ['totalunitscw', 'cwtotal', 'unitscw'])
             if total_cw_col:
                 total_units = pd.to_numeric(df[total_cw_col], errors='coerce').sum()
                 st.metric("Total Units (CW)", f"{total_units:,.0f}")
         with col3:
             # Find total_units_l30d column
-            total_l30_col = None
-            for col in df.columns:
-                if col.lower().replace("_", "").replace(" ", "") == 'totalunitsl30d':
-                    total_l30_col = col
-                    break
+            total_l30_col = find_column(df, ['totalunitsl30d', 'l30dtotal', 'unitsl30d'])
             if total_l30_col:
                 total_l30 = pd.to_numeric(df[total_l30_col], errors='coerce').sum()
                 st.metric("Total Units (L30D)", f"{total_l30:,.0f}")
@@ -1102,11 +1103,7 @@ elif st.session_state.samriddhi_data is not None:
         df = st.session_state.samriddhi_data
         
         # 1. Cluster Filter
-        cluster_col = None
-        for col in df.columns:
-            if col.lower().replace("_", "").replace(" ", "") in ['custcluster', 'cluster']:
-                cluster_col = col
-                break
+        cluster_col = find_column(df, ['custcluster', 'cluster', 'customercluster'])
         
         if cluster_col:
             selected_clusters = st.multiselect(
