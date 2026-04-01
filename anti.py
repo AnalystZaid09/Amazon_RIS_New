@@ -146,10 +146,15 @@ with st.sidebar:
             if ris_file and state_fc_file and purchase_file:
                 with st.spinner("Processing data..."):
                     try:
-                        # Read files
-                        ris_df = pd.read_csv(ris_file)
+                        # Read files with robust encoding and strip whitespace from headers
+                        ris_df = pd.read_csv(ris_file, encoding='utf-8-sig')
+                        ris_df.columns = ris_df.columns.str.strip()
+                        
                         state_fc_df = pd.read_excel(state_fc_file, sheet_name="Sheet2")
+                        state_fc_df.columns = state_fc_df.columns.str.strip()
+                        
                         purchase_df = pd.read_excel(purchase_file)
+                        purchase_df.columns = purchase_df.columns.str.strip()
                         
                         # Rename columns in state_fc_df
                         state_fc_df = state_fc_df.rename(columns={
@@ -159,7 +164,20 @@ with st.sidebar:
                             state_fc_df.columns[3]: "FC State Cluster"
                         })
                         
-                        # Create mappings
+                        # Create mappings with stripped string keys for robust matching
+                        state_fc_df["FC"] = state_fc_df["FC"].astype(str).str.strip()
+                        ris_df["FC"] = ris_df["FC"].astype(str).str.strip()
+                        
+                        # Robust Column Mapping for Portal
+                        portal_col_map = {}
+                        for col in ris_df.columns:
+                            c_clean = col.lower().replace(" ", "").replace("-", "").replace("_", "")
+                            if c_clean == "shippingstate": portal_col_map[col] = "Shipping State"
+                            if c_clean in ["shippedquantity", "shippedqty", "qty"]: portal_col_map[col] = "Shipped Quantity"
+                            if c_clean in ["merchantsku", "sku"]: portal_col_map[col] = "Merchant SKU"
+                            if c_clean == "fc": portal_col_map[col] = "FC"
+                        ris_df = ris_df.rename(columns=portal_col_map)
+                        
                         fc_state_map = dict(zip(state_fc_df["FC"], state_fc_df["FC State"]))
                         fc_cluster_map = dict(zip(state_fc_df["FC"], state_fc_df["FC Cluster"]))
                         fc_state_cluster_map = dict(zip(state_fc_df["FC"], state_fc_df["FC State Cluster"]))
@@ -410,12 +428,15 @@ with st.sidebar:
                     try:
                         # Read RIS Week file (support both CSV and Excel)
                         if ris_week_file.name.endswith('.csv'):
-                            ris_week_df = pd.read_csv(ris_week_file)
+                            ris_week_df = pd.read_csv(ris_week_file, encoding='utf-8-sig')
                         else:
                             ris_week_df = pd.read_excel(ris_week_file)
                         
+                        ris_week_df.columns = ris_week_df.columns.str.strip()
+                        
                         # Read PM file
                         pm_df = pd.read_excel(pm_file)
+                        pm_df.columns = pm_df.columns.str.strip()
                         
                         # Calculate Non RIS = total - ris_units
                         # First, check which columns exist for total and ris_units
@@ -649,10 +670,12 @@ with st.sidebar:
                 with st.spinner("Processing Samriddhi data..."):
                     try:
                         # Read Samriddhi CSV
-                        sam_df = pd.read_csv(samriddhi_file)
+                        sam_df = pd.read_csv(samriddhi_file, encoding='utf-8-sig')
+                        sam_df.columns = sam_df.columns.str.strip()
                         
                         # Read PM Excel
                         pm_df = pd.read_excel(pm_file_samriddhi)
+                        pm_df.columns = pm_df.columns.str.strip()
                         
                         # Normalize ASIN columns
                         pm_asin_col = None
@@ -1141,7 +1164,7 @@ elif st.session_state.samriddhi_data is not None:
             st.warning("⚠️ Brand-wise pivot not available.")
             
     # Tab 3: Cluster-wise Pivot
-    with sam_tabs[2]:
+    with sam_tabs[3]:
         st.header("🏢 Cluster-wise Analysis")
         if 'cluster_wise' in st.session_state.samriddhi_results:
             df = st.session_state.samriddhi_results['cluster_wise']
@@ -1156,7 +1179,7 @@ elif st.session_state.samriddhi_data is not None:
             st.warning("⚠️ Cluster-wise pivot not available.")
             
     # Tab 4: ASIN-wise Pivot
-    with sam_tabs[3]:
+    with sam_tabs[4]:
         st.header("🔖 ASIN-wise Analysis")
         if 'asin_wise' in st.session_state.samriddhi_results:
             df = st.session_state.samriddhi_results['asin_wise']
